@@ -1,0 +1,35 @@
+{
+  "name": "chaengyeosum-ait",
+  "private": true,
+  "version": "0.1.0",
+  "type": "module",
+  "scripts": {
+    "dev": "node server/dev.mjs",
+    "dev:web": "vite --host 0.0.0.0",
+    "dev:api": "node server/index.mjs",
+    "dev:worker": "wrangler dev",
+    "typecheck": "tsc --noEmit",
+    "test:api": "node --test server/*.test.mjs",
+    "test:worker": "node worker/smoke.mjs",
+    "test:ai-live": "node worker/ai-smoke.mjs",
+    "db:migrate:local": "wrangler d1 migrations apply chaengyeosum-prod --local",
+    "db:migrate:remote": "wrangler d1 migrations apply chaengyeosum-prod --remote",
+    "deploy:worker": "wrangler deploy",
+    "build:web": "tsc && vite build",
+    "build": "ait build"
+  },
+  "dependencies": {
+    "@apps-in-toss/web-framework": "2.10.7",
+    "@radix-ui/react-icons": "1.3.2",
+    "react": "19.2.7",
+    "react-dom": "19.2.7"
+  },
+  "devDependencies": {
+    "@types/react": "19.2.17",
+    "@types/react-dom": "19.2.3",
+    "@vitejs/plugin-react": "6.0.3",
+    "typescript": "7.0.2",
+    "vite": "8.1.3",
+    "wrangler": "^4.114.0"
+  }
+}

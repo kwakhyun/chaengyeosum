@@ -1,0 +1,24 @@
+name = "chaengyeosum-api"
+main = "worker/index.mjs"
+compatibility_date = "2026-07-28"
+workers_dev = true
+
+[assets]
+directory = "./submission-assets/final"
+
+[observability]
+enabled = true
+
+[[durable_objects.bindings]]
+name = "AI_EGRESS"
+class_name = "OpenAiEgress"
+
+[exports.OpenAiEgress]
+type = "durable-object"
+storage = "sqlite"
+
+[[d1_databases]]
+binding = "DB"
+database_name = "chaengyeosum-prod"
+database_id = "34b930b5-4d62-4071-aa86-967e9331b6d2"
+migrations_dir = "migrations"

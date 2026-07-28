@@ -1,0 +1,9 @@
+node_modules/
+dist/
+.granite/
+*.ait
+server/.data/
+.wrangler/
+.env
+.env.local
+.dev.vars

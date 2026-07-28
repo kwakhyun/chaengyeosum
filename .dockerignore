@@ -1,0 +1,8 @@
+node_modules
+dist
+.granite
+*.ait
+server/.data
+.env*
+work
+
