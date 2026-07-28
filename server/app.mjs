@@ -370,6 +370,28 @@ export function createApiServer({
         return;
       }
 
+      if (request.method === "GET" && path === "/api/crowd-highlights") {
+        const places = await Promise.all(
+          PLACES.filter((place) => place.seoulCrowdArea).map(async (place) => ({
+            id: place.id,
+            name: place.name,
+            latitude: place.latitude,
+            longitude: place.longitude,
+            city: place.city,
+            currentCrowd: await getCurrentCrowdIntelligence({
+              place,
+              apiKey: seoulOpenDataApiKey,
+              fetchImpl,
+            }),
+          })),
+        );
+        json(response, 200, {
+          places,
+          meta: { generatedAt: Date.now() },
+        });
+        return;
+      }
+
       if (request.method === "GET" && path === "/api/place-search") {
         const places = await searchPlaces(
           url.searchParams.get("q"),

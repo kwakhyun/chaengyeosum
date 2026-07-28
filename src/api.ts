@@ -45,6 +45,13 @@ export function listPlaces() {
   return request<{ places: Place[] }>("/places");
 }
 
+export function listCrowdHighlights() {
+  return request<{
+    places: Place[];
+    meta: { generatedAt: number };
+  }>("/crowd-highlights");
+}
+
 export function searchPlaces(query: string) {
   return request<{ places: Place[] }>(
     `/place-search?q=${encodeURIComponent(query)}`,

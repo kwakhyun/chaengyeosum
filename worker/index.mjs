@@ -527,18 +527,7 @@ async function getAiBriefing(request, env, db, outingId) {
   }
 }
 
-async function getPlaceIntelligence(request, env, db, outingId) {
-  const bundle = await getOutingBundle(db, outingId, {
-    token: bearerToken(request),
-  });
-  if (bundle.status === "not_found") {
-    return json(request, 404, { error: "모임을 찾지 못했어요." });
-  }
-  if (bundle.status !== "ok" || !bundle.viewer) {
-    return json(request, 403, { error: "참여자 권한이 필요해요." });
-  }
-
-  const place = outingPlace(bundle.outing);
+async function getCrowdForPlace(env, db, place) {
   const now = Date.now();
   const cached = await first(
     db,
@@ -548,13 +537,13 @@ async function getPlaceIntelligence(request, env, db, outingId) {
   );
   if (cached) {
     try {
-      return json(request, 200, {
+      return {
         crowd: JSON.parse(cached.payload),
         meta: {
           cached: true,
           expiresAt: Number(cached.expires_at),
         },
-      });
+      };
     } catch {
       await db
         .prepare("DELETE FROM crowd_cache WHERE place_id = ?")
@@ -585,10 +574,26 @@ async function getPlaceIntelligence(request, env, db, outingId) {
     `)
     .bind(place.id, JSON.stringify(crowd), now, expiresAt)
     .run();
-  return json(request, 200, {
+  return {
     crowd,
     meta: { cached: false, expiresAt },
+  };
+}
+
+async function getPlaceIntelligence(request, env, db, outingId) {
+  const bundle = await getOutingBundle(db, outingId, {
+    token: bearerToken(request),
   });
+  if (bundle.status === "not_found") {
+    return json(request, 404, { error: "모임을 찾지 못했어요." });
+  }
+  if (bundle.status !== "ok" || !bundle.viewer) {
+    return json(request, 403, { error: "참여자 권한이 필요해요." });
+  }
+
+  const place = outingPlace(bundle.outing);
+  const result = await getCrowdForPlace(env, db, place);
+  return json(request, 200, result);
 }
 
 async function getSummerEvents(request, env, db, outingId) {
@@ -1241,6 +1246,25 @@ async function handleRequest(request, env) {
         city: place.city,
         currentCrowd: estimateCurrentCrowd(place),
       })),
+    });
+  }
+  if (request.method === "GET" && path === "/api/crowd-highlights") {
+    const places = await Promise.all(
+      PLACES.filter((place) => place.seoulCrowdArea).map(async (place) => {
+        const result = await getCrowdForPlace(env, db, place);
+        return {
+          id: place.id,
+          name: place.name,
+          latitude: place.latitude,
+          longitude: place.longitude,
+          city: place.city,
+          currentCrowd: result.crowd,
+        };
+      }),
+    );
+    return json(request, 200, {
+      places,
+      meta: { generatedAt: Date.now() },
     });
   }
   if (request.method === "GET" && path === "/api/place-search") {

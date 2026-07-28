@@ -49,6 +49,7 @@ import {
   getPackingRecommendations,
   getOuting,
   joinOuting,
+  listCrowdHighlights,
   listItemOptions,
   listPlaces,
   randomizeItems,
@@ -58,6 +59,7 @@ import {
   updateItem,
 } from "./api";
 import { AiBriefingCard } from "./components/AiBriefingCard";
+import { CrowdHighlightsCarousel } from "./components/CrowdHighlightsCarousel";
 import { PlaceIntelligenceCard } from "./components/PlaceIntelligenceCard";
 import { Sheet } from "./components/Sheet";
 import {
@@ -434,6 +436,8 @@ function HomePage({
 }) {
   const [createOpen, setCreateOpen] = useState(false);
   const [places, setPlaces] = useState<Place[]>([]);
+  const [crowdHighlights, setCrowdHighlights] = useState<Place[]>([]);
+  const [crowdHighlightsLoading, setCrowdHighlightsLoading] = useState(true);
   const [itemOptions, setItemOptions] = useState<ItemOption[]>([]);
   const [activities, setActivities] = useState<ActivityOption[]>([]);
   const [smartRecommendations, setSmartRecommendations] = useState<
@@ -480,6 +484,17 @@ function HomePage({
     Promise.all([listPlaces(), listItemOptions()])
       .then(([placeResult, itemResult]) => {
         setPlaces(placeResult.places);
+        setCrowdHighlights((current) =>
+          current.length > 0
+            ? current
+            : placeResult.places
+                .filter(
+                  (place) =>
+                    place.city === "서울" &&
+                    place.currentCrowd?.liveSupported,
+                )
+                .slice(0, 4),
+        );
         setItemOptions(itemResult.options);
         setActivities(itemResult.activities);
         setMaxItems(itemResult.maxItems);
@@ -490,6 +505,23 @@ function HomePage({
         );
       })
       .catch(() => setError("장소 목록을 불러오지 못했어요."));
+  }, []);
+
+  useEffect(() => {
+    let cancelled = false;
+    listCrowdHighlights()
+      .then((result) => {
+        if (!cancelled) setCrowdHighlights(result.places);
+      })
+      .catch(() => {
+        // 초기 장소 목록의 예상값을 유지해 슬라이더가 비지 않게 해요.
+      })
+      .finally(() => {
+        if (!cancelled) setCrowdHighlightsLoading(false);
+      });
+    return () => {
+      cancelled = true;
+    };
   }, []);
 
   useEffect(() => {
@@ -773,6 +805,10 @@ function HomePage({
       </section>
 
       <section className="recent-section" aria-labelledby="recent-title">
+        <CrowdHighlightsCarousel
+          places={crowdHighlights}
+          loading={crowdHighlightsLoading}
+        />
         <SummerTypeTest
           sharedType={sharedSummerType}
           onTrack={track}

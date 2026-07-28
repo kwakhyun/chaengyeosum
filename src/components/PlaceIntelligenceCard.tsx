@@ -6,6 +6,7 @@ import {
 } from "@radix-ui/react-icons";
 
 import type { CrowdSignal, SummerEventSearch } from "../types";
+import { CrowdPulseVisual } from "./CrowdPulseVisual";
 
 function observedLabel(value: string, live: boolean) {
   if (!live) return "현재 시간 기준 계산";
@@ -77,22 +78,13 @@ export function PlaceIntelligenceCard({
               >
                 {crowd.mode === "live" ? "공식 실시간" : "예상"}
               </span>
-              <strong>{crowd.label}</strong>
+              <strong>{placeName}</strong>
             </div>
             <small>
               {observedLabel(crowd.observedAt, crowd.mode === "live")}
             </small>
           </div>
-          <div
-            className="crowd-meter"
-            role="meter"
-            aria-label={`${placeName} 현재 혼잡도`}
-            aria-valuemin={0}
-            aria-valuemax={100}
-            aria-valuenow={crowd.score}
-          >
-            <span style={{ width: `${crowd.score}%` }} />
-          </div>
+          <CrowdPulseVisual crowd={crowd} placeName={placeName} />
           <p>{crowd.summary}</p>
           <ul>
             {crowd.reasons.slice(0, 2).map((reason) => (

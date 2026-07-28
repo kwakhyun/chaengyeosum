@@ -254,6 +254,9 @@ test("준비물은 1개 이상 15개 이하로 유지된다", async () => {
     );
     assert.equal(options.options.length, 18);
     assert.equal(options.maxItems, 15);
+    assert.ok(
+      options.options.every((option) => option.visual.startsWith("asset:")),
+    );
 
     const created = await fetch(`${baseUrl}/api/outings`, {
       method: "POST",
@@ -305,6 +308,56 @@ test("준비물은 1개 이상 15개 이하로 유지된다", async () => {
     );
     assert.equal(removeLast.status, 409);
   });
+});
+
+test("메인 혼잡 슬라이더에 한강공원 실시간 인구를 제공한다", async () => {
+  let crowdCalls = 0;
+  const fetchImpl = async (url) => {
+    assert.match(url, /citydata_ppltn/);
+    crowdCalls += 1;
+    return new Response(
+      JSON.stringify({
+        SeoulRtd: {
+          row: [
+            {
+              AREA_CONGEST_LVL: "보통",
+              AREA_CONGEST_MSG: "여유 공간을 찾을 수 있어요.",
+              AREA_PPLTN_MIN: "1500",
+              AREA_PPLTN_MAX: "2000",
+              PPLTN_TIME: "2026-07-29 08:20",
+              FCST_PPLTN: [
+                {
+                  FCST_TIME: "2026-07-29 09:00",
+                  FCST_CONGEST_LVL: "약간 붐빔",
+                  FCST_PPLTN_MIN: "2300",
+                  FCST_PPLTN_MAX: "2800",
+                },
+              ],
+            },
+          ],
+        },
+      }),
+      { status: 200 },
+    );
+  };
+
+  await withServer(
+    async (baseUrl) => {
+      const response = await fetch(`${baseUrl}/api/crowd-highlights`);
+      assert.equal(response.status, 200);
+      const payload = await response.json();
+      assert.equal(payload.places.length, 4);
+      assert.equal(crowdCalls, 4);
+      assert.ok(
+        payload.places.every(
+          (place) =>
+            place.currentCrowd.mode === "live" &&
+            place.currentCrowd.populationRange === "1,500~2,000명",
+        ),
+      );
+    },
+    { seoulOpenDataApiKey: "secret", fetchImpl },
+  );
 });
 
 test("활동 유형에 맞는 스마트 준비물을 추천한다", async () => {

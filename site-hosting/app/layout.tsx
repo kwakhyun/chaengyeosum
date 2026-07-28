@@ -13,7 +13,7 @@ export async function generateMetadata(): Promise<Metadata> {
     (host.startsWith("localhost") ? "http" : "https");
   const title = "챙겨썸 — 같이 챙기면 여름이 가벼워져요";
   const description =
-    "날씨 맞춤 준비물부터 친구별 담당, AI 출발 전 브리핑까지 한곳에서 준비하세요.";
+    "한강 실시간 추정 인구와 덜 붐비는 출발 시간, 날씨 맞춤 준비물까지 친구들과 한곳에서 준비하세요.";
 
   return {
     metadataBase: new URL(`${protocol}://${host}`),
@@ -30,10 +30,10 @@ export async function generateMetadata(): Promise<Metadata> {
       locale: "ko_KR",
       images: [
         {
-          url: "/og.png",
+          url: "/og-live.png",
           width: 1774,
           height: 887,
-          alt: "챙겨썸 — 같이 챙기면 여름이 가벼워져요",
+          alt: "챙겨썸 — 지금 한강, 자리 있을까?",
         },
       ],
     },
@@ -41,7 +41,7 @@ export async function generateMetadata(): Promise<Metadata> {
       card: "summary_large_image",
       title,
       description,
-      images: ["/og.png"],
+      images: ["/og-live.png"],
     },
   };
 }
