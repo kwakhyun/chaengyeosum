@@ -22,6 +22,26 @@ export interface CrowdSignal {
     note: string;
   };
   liveSupported: boolean;
+  forecast: CrowdForecast[];
+  timingAdvice: CrowdTimingAdvice | null;
+}
+
+export interface CrowdForecast {
+  time: string;
+  level: CrowdSignal["level"];
+  label: string;
+  score: number;
+  populationRange: string;
+  populationMidpoint: number;
+}
+
+export interface CrowdTimingAdvice {
+  verdict: string;
+  summary: string;
+  bestTime: string;
+  bestLabel: string;
+  peakTime: string;
+  peakLabel: string;
 }
 
 export interface PlaceIntelligenceResponse {

@@ -99,6 +99,37 @@ export function PlaceIntelligenceCard({
               <li key={reason}>{reason}</li>
             ))}
           </ul>
+          {crowd.mode === "live" && crowd.timingAdvice ? (
+            <div className="crowd-timing-advice">
+              <small>SMART TIMING</small>
+              <strong>{crowd.timingAdvice.verdict}</strong>
+              <p>{crowd.timingAdvice.summary}</p>
+            </div>
+          ) : null}
+          {crowd.mode === "live" &&
+          (crowd.forecast?.length ?? 0) > 0 ? (
+            <div className="crowd-forecast">
+              <div>
+                <strong>앞으로 12시간</strong>
+                <span>서울시 혼잡 전망</span>
+              </div>
+              <ol aria-label="시간대별 예상 혼잡도">
+                {crowd.forecast?.map((item) => (
+                  <li
+                    className={`crowd-forecast__item crowd-forecast__item--${item.level}`}
+                    key={item.time}
+                  >
+                    <time dateTime={item.time}>
+                      {item.time.slice(11, 16)}
+                    </time>
+                    <i aria-hidden="true" />
+                    <strong>{item.label}</strong>
+                    <small>{item.populationRange}</small>
+                  </li>
+                ))}
+              </ol>
+            </div>
+          ) : null}
           <div className="crowd-result__source">
             <span>{crowd.source.note}</span>
             {crowd.source.url ? (

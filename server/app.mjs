@@ -245,7 +245,11 @@ export function createApiServer({
       apiKey: seoulOpenDataApiKey,
       fetchImpl,
     });
-    const expiresAt = now + 5 * 60 * 1000;
+    const cacheTtlMs =
+      crowd.mode === "estimate" && crowd.liveSupported
+        ? 30 * 1000
+        : 5 * 60 * 1000;
+    const expiresAt = now + cacheTtlMs;
     crowdCache.set(place.id, { crowd, expiresAt });
     json(response, 200, {
       crowd,

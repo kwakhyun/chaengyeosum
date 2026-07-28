@@ -567,7 +567,13 @@ async function getPlaceIntelligence(request, env, db, outingId) {
     place,
     apiKey: env.SEOUL_OPEN_DATA_API_KEY ?? "",
   });
-  const expiresAt = now + 5 * 60 * 1000;
+  // 실시간 지원 장소에서 외부 API가 잠시 실패한 경우 예상값이 오래
+  // 남지 않게 해 다음 조회에서 공식 데이터를 빠르게 다시 시도해요.
+  const cacheTtlMs =
+    crowd.mode === "estimate" && crowd.liveSupported
+      ? 30 * 1000
+      : 5 * 60 * 1000;
+  const expiresAt = now + cacheTtlMs;
   await db
     .prepare(`
       INSERT INTO crowd_cache (place_id, payload, fetched_at, expires_at)

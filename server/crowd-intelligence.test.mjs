@@ -39,6 +39,20 @@ test("서울 실시간 인구 응답을 공식 혼잡 신호로 변환한다", a
                 AREA_PPLTN_MIN: "12000",
                 AREA_PPLTN_MAX: "14000",
                 PPLTN_TIME: "2026-07-29 14:00",
+                FCST_PPLTN: [
+                  {
+                    FCST_TIME: "2026-07-29 15:00",
+                    FCST_CONGEST_LVL: "약간 붐빔",
+                    FCST_PPLTN_MIN: "15000",
+                    FCST_PPLTN_MAX: "17000",
+                  },
+                  {
+                    FCST_TIME: "2026-07-29 18:00",
+                    FCST_CONGEST_LVL: "여유",
+                    FCST_PPLTN_MIN: "9000",
+                    FCST_PPLTN_MAX: "11000",
+                  },
+                ],
               },
             ],
           },
@@ -50,5 +64,9 @@ test("서울 실시간 인구 응답을 공식 혼잡 신호로 변환한다", a
   assert.equal(result.mode, "live");
   assert.equal(result.level, "busy");
   assert.equal(result.populationRange, "12,000~14,000명");
+  assert.equal(result.forecast.length, 2);
+  assert.equal(result.forecast[1].populationRange, "9,000~11,000명");
+  assert.equal(result.timingAdvice.verdict, "18:00 출발 추천");
+  assert.match(result.timingAdvice.summary, /23% 여유/);
   assert.ok(result.source.url.startsWith("https://data.seoul.go.kr"));
 });

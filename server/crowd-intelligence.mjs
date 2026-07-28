@@ -107,6 +107,8 @@ export function estimateCurrentCrowd(place, now = new Date()) {
       note: "요일·시간·계절·장소 인기도를 조합한 참고용 예상치",
     },
     liveSupported: Boolean(place.seoulCrowdArea),
+    forecast: [],
+    timingAdvice: null,
   };
 }
 
@@ -131,6 +133,93 @@ function findCrowdPayload(value, depth = 0) {
   return null;
 }
 
+function populationRange(minimumValue, maximumValue) {
+  const minimum = Number(minimumValue);
+  const maximum = Number(maximumValue);
+  if (!Number.isFinite(minimum) || !Number.isFinite(maximum)) {
+    return null;
+  }
+  return {
+    minimum,
+    maximum,
+    midpoint: Math.round((minimum + maximum) / 2),
+    label: `${minimum.toLocaleString("ko-KR")}~${maximum.toLocaleString("ko-KR")}명`,
+  };
+}
+
+function parseForecast(crowd) {
+  const rows = Array.isArray(crowd.FCST_PPLTN) ? crowd.FCST_PPLTN : [];
+  return rows
+    .map((row) => {
+      const range = populationRange(
+        row?.FCST_PPLTN_MIN,
+        row?.FCST_PPLTN_MAX,
+      );
+      const time = cleanText(row?.FCST_TIME, 40);
+      if (!range || !time) return null;
+      const level = normalizeOfficialLevel(row.FCST_CONGEST_LVL);
+      return {
+        time,
+        level,
+        label: CROWD_LEVELS[level].label,
+        score: CROWD_LEVELS[level].score,
+        populationRange: range.label,
+        populationMidpoint: range.midpoint,
+      };
+    })
+    .filter(Boolean)
+    .slice(0, 12);
+}
+
+function getTimingAdvice(currentLevel, currentMidpoint, forecast) {
+  if (forecast.length === 0) return null;
+  const best = forecast.reduce((selected, item) =>
+    item.populationMidpoint < selected.populationMidpoint ? item : selected,
+  );
+  const peak = forecast.reduce((selected, item) =>
+    item.populationMidpoint > selected.populationMidpoint ? item : selected,
+  );
+  const bestIsMeaningfullyLower =
+    Number.isFinite(currentMidpoint) &&
+    best.populationMidpoint <= currentMidpoint * 0.88;
+  const currentIsComfortable =
+    currentLevel === "relaxed" || currentLevel === "normal";
+
+  if (
+    currentIsComfortable &&
+    (!bestIsMeaningfullyLower || peak.populationMidpoint > currentMidpoint * 1.2)
+  ) {
+    return {
+      verdict: "지금 출발 추천",
+      summary: `${peak.time.slice(11, 16)} 무렵 더 붐빌 수 있어 지금 움직이는 편이 좋아요.`,
+      bestTime: best.time,
+      bestLabel: best.label,
+      peakTime: peak.time,
+      peakLabel: peak.label,
+    };
+  }
+  if (bestIsMeaningfullyLower) {
+    return {
+      verdict: `${best.time.slice(11, 16)} 출발 추천`,
+      summary: `지금보다 약 ${Math.round(
+        (1 - best.populationMidpoint / currentMidpoint) * 100,
+      )}% 여유로울 전망이에요.`,
+      bestTime: best.time,
+      bestLabel: best.label,
+      peakTime: peak.time,
+      peakLabel: peak.label,
+    };
+  }
+  return {
+    verdict: "시간대 차이가 크지 않아요",
+    summary: `향후 12시간 중 ${best.time.slice(11, 16)} 무렵이 가장 여유로울 전망이에요.`,
+    bestTime: best.time,
+    bestLabel: best.label,
+    peakTime: peak.time,
+    peakLabel: peak.label,
+  };
+}
+
 export async function fetchSeoulCurrentCrowd({
   place,
   apiKey,
@@ -143,7 +232,9 @@ export async function fetchSeoulCurrentCrowd({
   try {
     const response = await fetchImpl(
       [
-        "https://openapi.seoul.go.kr:8088",
+        // 서울 열린데이터광장의 공식 실시간 인구 API는 8088 HTTP
+        // 엔드포인트를 사용해요. 키는 Worker secret에서만 읽습니다.
+        "http://openapi.seoul.go.kr:8088",
         encodeURIComponent(apiKey),
         "json",
         "citydata_ppltn",
@@ -153,19 +244,37 @@ export async function fetchSeoulCurrentCrowd({
       ].join("/"),
       { signal: controller.signal },
     );
-    if (!response.ok) return null;
+    if (!response.ok) {
+      console.warn(
+        JSON.stringify({
+          event: "seoul_crowd_fetch_failed",
+          reason: "http_status",
+          status: response.status,
+          area: place.seoulCrowdArea,
+        }),
+      );
+      return null;
+    }
     const payload = await response.json();
     const crowd = findCrowdPayload(payload);
-    if (!crowd) return null;
+    if (!crowd) {
+      console.warn(
+        JSON.stringify({
+          event: "seoul_crowd_fetch_failed",
+          reason: "invalid_payload",
+          area: place.seoulCrowdArea,
+        }),
+      );
+      return null;
+    }
 
     const level = normalizeOfficialLevel(crowd.AREA_CONGEST_LVL);
     const state = CROWD_LEVELS[level];
-    const minimum = Number(crowd.AREA_PPLTN_MIN);
-    const maximum = Number(crowd.AREA_PPLTN_MAX);
-    const populationRange =
-      Number.isFinite(minimum) && Number.isFinite(maximum)
-        ? `${minimum.toLocaleString("ko-KR")}~${maximum.toLocaleString("ko-KR")}명`
-        : null;
+    const currentPopulation = populationRange(
+      crowd.AREA_PPLTN_MIN,
+      crowd.AREA_PPLTN_MAX,
+    );
+    const forecast = parseForecast(crowd);
     const officialMessage = cleanText(crowd.AREA_CONGEST_MSG, 180);
     return {
       mode: "live",
@@ -176,10 +285,12 @@ export async function fetchSeoulCurrentCrowd({
         officialMessage ||
         `서울시 실시간 인구 기준 현재 ${state.label} 단계예요.`,
       reasons: [
-        populationRange ? `추정 인구 ${populationRange}` : "",
+        currentPopulation
+          ? `추정 인구 ${currentPopulation.label}`
+          : "",
         "통신사 실시간 인구와 장소 면적을 함께 분석해요",
       ].filter(Boolean),
-      populationRange,
+      populationRange: currentPopulation?.label ?? null,
       observedAt: cleanText(crowd.PPLTN_TIME, 40) || now.toISOString(),
       source: {
         name: "서울 실시간 도시데이터",
@@ -187,8 +298,25 @@ export async function fetchSeoulCurrentCrowd({
         note: "서울시 주요 장소 실시간 인구 혼잡도",
       },
       liveSupported: true,
+      forecast,
+      timingAdvice: getTimingAdvice(
+        level,
+        currentPopulation?.midpoint,
+        forecast,
+      ),
     };
-  } catch {
+  } catch (error) {
+    console.warn(
+      JSON.stringify({
+        event: "seoul_crowd_fetch_failed",
+        reason:
+          error instanceof DOMException && error.name === "AbortError"
+            ? "timeout"
+            : "network_error",
+        errorName: error instanceof Error ? error.name : "UnknownError",
+        area: place.seoulCrowdArea,
+      }),
+    );
     return null;
   } finally {
     clearTimeout(timeout);
@@ -209,4 +337,3 @@ export async function getCurrentCrowdIntelligence({
   });
   return live ?? estimateCurrentCrowd(place, now);
 }
-
