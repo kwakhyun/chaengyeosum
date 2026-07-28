@@ -132,7 +132,7 @@ export function resolveItemSelection(itemKeys, customItems) {
         .map((label) => ({
           key: null,
           label,
-          visual: "icon:custom",
+          visual: "asset:item-custom-3d.png",
           recommended: false,
         }))
     : [];

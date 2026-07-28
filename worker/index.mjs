@@ -964,7 +964,11 @@ async function addItem(request, db, outingId) {
   const item =
     option ??
     (customLabel
-      ? { key: null, label: customLabel, visual: "icon:custom" }
+      ? {
+          key: null,
+          label: customLabel,
+          visual: "asset:item-custom-3d.png",
+        }
       : null);
   if (!item) {
     return json(request, 400, {

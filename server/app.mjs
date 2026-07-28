@@ -632,7 +632,7 @@ export function createApiServer({
             ? {
                 key: null,
                 label: customLabel,
-                visual: "icon:custom",
+                visual: "asset:item-custom-3d.png",
               }
             : null);
         if (!item) {

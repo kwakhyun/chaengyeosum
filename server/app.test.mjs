@@ -53,6 +53,10 @@ test("모임 생성, 초대 참여, 공동 체크 상태가 API에 저장된다"
     assert.ok(
       created.outing.items.some((item) => item.label === "보드게임"),
     );
+    assert.equal(
+      created.outing.items.find((item) => item.label === "보드게임").visual,
+      "asset:item-custom-3d.png",
+    );
 
     const joinResponse = await fetch(
       `${baseUrl}/api/outings/${outingId}/join`,
