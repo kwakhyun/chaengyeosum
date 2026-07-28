@@ -45,17 +45,20 @@ import {
   createAiBriefing,
   createOuting,
   deleteItem,
+  getPlaceIntelligence,
   getPackingRecommendations,
   getOuting,
   joinOuting,
   listItemOptions,
   listPlaces,
   randomizeItems,
+  searchSummerEvents,
   searchPlaces,
   toggleEventReaction,
   updateItem,
 } from "./api";
 import { AiBriefingCard } from "./components/AiBriefingCard";
+import { PlaceIntelligenceCard } from "./components/PlaceIntelligenceCard";
 import { Sheet } from "./components/Sheet";
 import {
   isSummerTypeKey,
@@ -70,6 +73,7 @@ import {
 import type {
   ActivityOption,
   AiOutingBriefing,
+  CrowdSignal,
   OutingBundle,
   ItemOption,
   OutingEvent,
@@ -79,6 +83,7 @@ import type {
   Place,
   SavedSession,
   SmartRecommendation,
+  SummerEventSearch,
 } from "./types";
 import "./styles.css";
 
@@ -1027,6 +1032,9 @@ function HomePage({
                 {places.map((place) => (
                   <option key={place.id} value={place.id}>
                     {place.name}
+                    {place.currentCrowd
+                      ? ` · ${place.currentCrowd.label}`
+                      : ""}
                   </option>
                 ))}
               </select>
@@ -1159,6 +1167,13 @@ function OutingPage({
   const [aiSnapshot, setAiSnapshot] = useState("");
   const [aiLoading, setAiLoading] = useState(false);
   const [aiError, setAiError] = useState("");
+  const [crowd, setCrowd] = useState<CrowdSignal | null>(null);
+  const [crowdLoading, setCrowdLoading] = useState(false);
+  const [crowdError, setCrowdError] = useState("");
+  const [summerEvents, setSummerEvents] =
+    useState<SummerEventSearch | null>(null);
+  const [summerEventsLoading, setSummerEventsLoading] = useState(false);
+  const [summerEventsError, setSummerEventsError] = useState("");
   const [highlightedItemId, setHighlightedItemId] = useState("");
   const previousReadyCount = useRef<number | null>(null);
 
@@ -1202,6 +1217,32 @@ function OutingPage({
     const timer = window.setInterval(() => void refresh(), 2500);
     return () => window.clearInterval(timer);
   }, [refresh, session]);
+
+  const loadCrowd = useCallback(async () => {
+    if (!session) return;
+    setCrowdLoading(true);
+    setCrowdError("");
+    try {
+      const result = await getPlaceIntelligence(outingId, session.token);
+      setCrowd(result.crowd);
+      track("place_crowd_loaded", {
+        mode: result.crowd.mode,
+        level: result.crowd.level,
+      });
+    } catch (loadError) {
+      setCrowdError(
+        loadError instanceof Error
+          ? loadError.message
+          : "혼잡도를 불러오지 못했어요.",
+      );
+    } finally {
+      setCrowdLoading(false);
+    }
+  }, [outingId, session]);
+
+  useEffect(() => {
+    void loadCrowd();
+  }, [loadCrowd]);
 
   useEffect(() => {
     if (!notice) return;
@@ -1441,6 +1482,31 @@ function OutingPage({
     }
   };
 
+  const handleSummerEventSearch = async () => {
+    if (!session || summerEventsLoading) return;
+    setSummerEventsLoading(true);
+    setSummerEventsError("");
+    track("summer_events_requested", { outing_id: outingId });
+    try {
+      const result = await searchSummerEvents(outingId, session.token);
+      setSummerEvents(result.events);
+      track("summer_events_loaded", {
+        outing_id: outingId,
+        event_count: result.events.events.length,
+        cached: result.meta.cached ? 1 : 0,
+      });
+    } catch (searchError) {
+      setSummerEventsError(
+        searchError instanceof Error
+          ? searchError.message
+          : "행사 정보를 확인하지 못했어요.",
+      );
+      track("summer_events_failed", { outing_id: outingId });
+    } finally {
+      setSummerEventsLoading(false);
+    }
+  };
+
   const focusAiItem = (itemKey: string) => {
     if (!bundle) return;
     const item = bundle.items.find(
@@ -1660,6 +1726,20 @@ function OutingPage({
           onGenerate={() => void handleAiGenerate()}
           onShare={() => void handleAiShare()}
           onFocusItem={focusAiItem}
+        />
+      ) : null}
+
+      {bundle.viewer ? (
+        <PlaceIntelligenceCard
+          placeName={bundle.outing.placeName}
+          crowd={crowd}
+          crowdLoading={crowdLoading}
+          crowdError={crowdError}
+          events={summerEvents}
+          eventLoading={summerEventsLoading}
+          eventError={summerEventsError}
+          onRefreshCrowd={() => void loadCrowd()}
+          onSearchEvents={() => void handleSummerEventSearch()}
         />
       ) : null}
 

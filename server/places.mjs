@@ -4,36 +4,52 @@ export const PLACES = [
     name: "여의도 한강공원",
     latitude: 37.5283,
     longitude: 126.9344,
+    city: "서울",
+    crowdBaseline: 58,
+    seoulCrowdArea: "여의도한강공원",
   },
   {
     id: "banpo-hangang",
     name: "반포 한강공원",
     latitude: 37.5105,
     longitude: 126.995,
+    city: "서울",
+    crowdBaseline: 62,
+    seoulCrowdArea: "반포한강공원",
   },
   {
     id: "ttukseom-hangang",
     name: "뚝섬 한강공원",
     latitude: 37.5293,
     longitude: 127.0731,
+    city: "서울",
+    crowdBaseline: 61,
+    seoulCrowdArea: "뚝섬한강공원",
   },
   {
     id: "nanji-hangang",
     name: "난지 한강공원",
     latitude: 37.5668,
     longitude: 126.8766,
+    city: "서울",
+    crowdBaseline: 48,
+    seoulCrowdArea: "난지한강공원",
   },
   {
     id: "gwangalli",
     name: "광안리 해수욕장",
     latitude: 35.1532,
     longitude: 129.1187,
+    city: "부산",
+    crowdBaseline: 65,
   },
   {
     id: "eulwangri",
     name: "을왕리 해수욕장",
     latitude: 37.4477,
     longitude: 126.3724,
+    city: "인천",
+    crowdBaseline: 57,
   },
 ];
 
@@ -64,6 +80,8 @@ export function getCustomPlace(value) {
     name,
     latitude,
     longitude,
+    city: name.split(",").at(-1)?.trim().slice(0, 20) || "대한민국",
+    crowdBaseline: 45,
   };
 }
 

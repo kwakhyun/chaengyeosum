@@ -12,6 +12,10 @@ import {
   getBriefingState,
 } from "../server/ai-briefing.mjs";
 import {
+  estimateCurrentCrowd,
+  getCurrentCrowdIntelligence,
+} from "../server/crowd-intelligence.mjs";
+import {
   getCustomPlace,
   getPlace,
   PLACES,
@@ -23,6 +27,12 @@ import {
   getSmartPackingRecommendations,
   getSuggestedQuantity,
 } from "../server/smart-packing.mjs";
+import {
+  generateSummerEvents,
+  getSummerEventSearchState,
+  SUMMER_EVENT_CACHE_TTL_MS,
+  SUMMER_EVENT_DAILY_LIMIT,
+} from "../server/summer-events.mjs";
 import { getForecastWeather } from "../server/weather.mjs";
 
 const MAX_BODY_BYTES = 32 * 1024;
@@ -369,6 +379,30 @@ async function enrichBundle(db, bundle) {
   };
 }
 
+function outingPlace(outing) {
+  return (
+    getPlace(outing.placeId) ?? {
+      id: outing.placeId,
+      name: outing.placeName,
+      latitude: outing.latitude,
+      longitude: outing.longitude,
+      city: outing.placeName.split(",").at(-1)?.trim() || "대한민국",
+      crowdBaseline: 45,
+    }
+  );
+}
+
+function openAiFetch(env) {
+  if (!env.AI_EGRESS) return fetch;
+  return (url, options) => {
+    const id = env.AI_EGRESS.idFromName("openai-us-egress-v1");
+    const stub = env.AI_EGRESS.get(id, {
+      locationHint: "enam",
+    });
+    return stub.fetch(new Request(url, options));
+  };
+}
+
 async function getAiBriefing(request, env, db, outingId) {
   const token = bearerToken(request);
   const bundle = await getOutingBundle(db, outingId, { token });
@@ -430,19 +464,10 @@ async function getAiBriefing(request, env, db, outingId) {
   }
 
   try {
-    const openAiFetch = env.AI_EGRESS
-      ? (url, options) => {
-          const id = env.AI_EGRESS.idFromName("openai-us-egress-v1");
-          const stub = env.AI_EGRESS.get(id, {
-            locationHint: "enam",
-          });
-          return stub.fetch(new Request(url, options));
-        }
-      : fetch;
     const generated = await generateAiBriefing({
       bundle: enriched,
       apiKey: env.OPENAI_API_KEY,
-      fetchImpl: openAiFetch,
+      fetchImpl: openAiFetch(env),
     });
     const generatedAt = Date.now();
     const expiresAt = generatedAt + AI_BRIEFING_CACHE_TTL_MS;
@@ -498,6 +523,197 @@ async function getAiBriefing(request, env, db, outingId) {
     });
     return json(request, 502, {
       error: "AI 브리핑을 만들지 못했어요. 잠시 후 다시 시도해 주세요.",
+    });
+  }
+}
+
+async function getPlaceIntelligence(request, env, db, outingId) {
+  const bundle = await getOutingBundle(db, outingId, {
+    token: bearerToken(request),
+  });
+  if (bundle.status === "not_found") {
+    return json(request, 404, { error: "모임을 찾지 못했어요." });
+  }
+  if (bundle.status !== "ok" || !bundle.viewer) {
+    return json(request, 403, { error: "참여자 권한이 필요해요." });
+  }
+
+  const place = outingPlace(bundle.outing);
+  const now = Date.now();
+  const cached = await first(
+    db,
+    `SELECT payload, expires_at
+     FROM crowd_cache WHERE place_id = ? AND expires_at > ?`,
+    [place.id, now],
+  );
+  if (cached) {
+    try {
+      return json(request, 200, {
+        crowd: JSON.parse(cached.payload),
+        meta: {
+          cached: true,
+          expiresAt: Number(cached.expires_at),
+        },
+      });
+    } catch {
+      await db
+        .prepare("DELETE FROM crowd_cache WHERE place_id = ?")
+        .bind(place.id)
+        .run();
+    }
+  }
+
+  const crowd = await getCurrentCrowdIntelligence({
+    place,
+    apiKey: env.SEOUL_OPEN_DATA_API_KEY ?? "",
+  });
+  const expiresAt = now + 5 * 60 * 1000;
+  await db
+    .prepare(`
+      INSERT INTO crowd_cache (place_id, payload, fetched_at, expires_at)
+      VALUES (?, ?, ?, ?)
+      ON CONFLICT(place_id) DO UPDATE SET
+        payload = excluded.payload,
+        fetched_at = excluded.fetched_at,
+        expires_at = excluded.expires_at
+    `)
+    .bind(place.id, JSON.stringify(crowd), now, expiresAt)
+    .run();
+  return json(request, 200, {
+    crowd,
+    meta: { cached: false, expiresAt },
+  });
+}
+
+async function getSummerEvents(request, env, db, outingId) {
+  const bundle = await getOutingBundle(db, outingId, {
+    token: bearerToken(request),
+  });
+  if (bundle.status === "not_found") {
+    return json(request, 404, { error: "모임을 찾지 못했어요." });
+  }
+  if (bundle.status !== "ok" || !bundle.viewer) {
+    return json(request, 403, { error: "참여자 권한이 필요해요." });
+  }
+  if (!env.OPENAI_API_KEY) {
+    return json(request, 503, {
+      error: "AI 행사 검색을 준비하고 있어요. 잠시 후 다시 시도해 주세요.",
+    });
+  }
+
+  const place = outingPlace(bundle.outing);
+  const now = Date.now();
+  const { searchKey } = await getSummerEventSearchState({
+    outing: bundle.outing,
+    place,
+    now: new Date(now),
+  });
+  const cached = await first(
+    db,
+    `SELECT payload, model, created_at, expires_at
+     FROM summer_event_searches
+     WHERE outing_id = ? AND search_key = ? AND expires_at > ?`,
+    [outingId, searchKey, now],
+  );
+  if (cached) {
+    try {
+      return json(request, 200, {
+        events: JSON.parse(cached.payload),
+        meta: {
+          cached: true,
+          generatedAt: Number(cached.created_at),
+          expiresAt: Number(cached.expires_at),
+          model: cached.model,
+          searchKey,
+        },
+      });
+    } catch {
+      await db
+        .prepare(
+          "DELETE FROM summer_event_searches WHERE outing_id = ? AND search_key = ?",
+        )
+        .bind(outingId, searchKey)
+        .run();
+    }
+  }
+
+  const recentUsage = await first(
+    db,
+    `SELECT COUNT(*) AS count
+     FROM summer_event_searches
+     WHERE outing_id = ? AND created_at > ?`,
+    [outingId, now - 24 * 60 * 60 * 1000],
+  );
+  if (Number(recentUsage?.count ?? 0) >= SUMMER_EVENT_DAILY_LIMIT) {
+    return json(request, 429, {
+      error: "오늘 행사 검색을 충분히 했어요. 내일 다시 찾아볼게요.",
+    });
+  }
+
+  try {
+    const generated = await generateSummerEvents({
+      outing: bundle.outing,
+      place,
+      apiKey: env.OPENAI_API_KEY,
+      fetchImpl: openAiFetch(env),
+      now: new Date(now),
+    });
+    const generatedAt = Date.now();
+    const expiresAt = generatedAt + SUMMER_EVENT_CACHE_TTL_MS;
+    await db.batch([
+      db
+        .prepare(`
+          INSERT INTO summer_event_searches (
+            outing_id, search_key, payload, model, created_at, expires_at
+          ) VALUES (?, ?, ?, ?, ?, ?)
+          ON CONFLICT(outing_id, search_key) DO UPDATE SET
+            payload = excluded.payload,
+            model = excluded.model,
+            created_at = excluded.created_at,
+            expires_at = excluded.expires_at
+        `)
+        .bind(
+          outingId,
+          generated.searchKey,
+          JSON.stringify(generated.result),
+          generated.model,
+          generatedAt,
+          expiresAt,
+        ),
+      db
+        .prepare(
+          "DELETE FROM summer_event_searches WHERE outing_id = ? AND expires_at < ?",
+        )
+        .bind(outingId, now - 7 * 24 * 60 * 60 * 1000),
+    ]);
+    console.log("summer_event_search_generated", {
+      outingId,
+      model: generated.model,
+      cached: false,
+      sourceCount: generated.sourceCount,
+      usage: generated.usage,
+    });
+    return json(request, 201, {
+      events: generated.result,
+      meta: {
+        cached: false,
+        generatedAt,
+        expiresAt,
+        model: generated.model,
+        searchKey: generated.searchKey,
+        sourceCount: generated.sourceCount,
+      },
+    });
+  } catch (error) {
+    console.error("summer_event_search_failed", {
+      outingId,
+      code: error?.message ?? "unknown",
+      status: error?.status ?? null,
+      apiCode: error?.apiCode ?? null,
+      apiMessage: error?.apiMessage ?? null,
+    });
+    return json(request, 502, {
+      error: "행사 정보를 확인하지 못했어요. 잠시 후 다시 시도해 주세요.",
     });
   }
 }
@@ -1010,7 +1226,16 @@ async function handleRequest(request, env) {
     });
   }
   if (request.method === "GET" && path === "/api/places") {
-    return json(request, 200, { places: PLACES });
+    return json(request, 200, {
+      places: PLACES.map((place) => ({
+        id: place.id,
+        name: place.name,
+        latitude: place.latitude,
+        longitude: place.longitude,
+        city: place.city,
+        currentCrowd: estimateCurrentCrowd(place),
+      })),
+    });
   }
   if (request.method === "GET" && path === "/api/place-search") {
     return json(request, 200, {
@@ -1095,6 +1320,25 @@ async function handleRequest(request, env) {
   );
   if (request.method === "POST" && aiBriefingMatch) {
     return getAiBriefing(request, env, db, aiBriefingMatch[1]);
+  }
+
+  const placeIntelligenceMatch = path.match(
+    /^\/api\/outings\/([^/]+)\/place-intelligence$/,
+  );
+  if (request.method === "GET" && placeIntelligenceMatch) {
+    return getPlaceIntelligence(
+      request,
+      env,
+      db,
+      placeIntelligenceMatch[1],
+    );
+  }
+
+  const summerEventsMatch = path.match(
+    /^\/api\/outings\/([^/]+)\/summer-events$/,
+  );
+  if (request.method === "POST" && summerEventsMatch) {
+    return getSummerEvents(request, env, db, summerEventsMatch[1]);
   }
 
   const itemMatch = path.match(

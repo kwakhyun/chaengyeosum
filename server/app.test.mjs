@@ -334,6 +334,144 @@ test("활동 유형에 맞는 스마트 준비물을 추천한다", async () => 
   });
 });
 
+test("장소 혼잡도를 구분해 보여주고 AI 행사 출처를 검증해 캐시한다", async () => {
+  let openAiCalls = 0;
+  const officialUrl =
+    "https://www.visitbusan.net/schedule/view.do?boardId=BBS_0000009";
+  const fetchImpl = async (url, options) => {
+    assert.equal(url, "https://api.openai.com/v1/responses");
+    openAiCalls += 1;
+    const request = JSON.parse(options.body);
+    assert.equal(request.tools[0].type, "web_search");
+    assert.equal(request.tool_choice, "required");
+    assert.deepEqual(request.include, [
+      "web_search_call.action.sources",
+    ]);
+    return new Response(
+      JSON.stringify({
+        status: "completed",
+        model: "gpt-5.6-2026-07-01",
+        output: [
+          {
+            type: "web_search_call",
+            action: {
+              type: "search",
+              sources: [
+                {
+                  type: "url",
+                  url: officialUrl,
+                  title: "Visit Busan 행사 안내",
+                },
+              ],
+            },
+          },
+          {
+            type: "message",
+            content: [
+              {
+                type: "output_text",
+                text: JSON.stringify({
+                  headline: "광안리에서 여름밤을 즐겨요",
+                  searchSummary: "모임 날짜와 가까운 공식 행사를 확인했어요.",
+                  events: [
+                    {
+                      title: "광안리 M 드론라이트쇼",
+                      dateLabel: "2026년 여름 매주 토요일",
+                      venue: "광안리 해변",
+                      why: "준비를 마친 뒤 함께 보기 좋아요.",
+                      sourceTitle: "Visit Busan",
+                      sourceUrl: "https://www.visitbusan.net/schedule/view.do",
+                    },
+                    {
+                      title: "출처 없는 가짜 행사",
+                      dateLabel: "2026년 8월",
+                      venue: "광안리",
+                      why: "가짜예요.",
+                      sourceTitle: "가짜",
+                      sourceUrl: "https://example.com/fake",
+                    },
+                  ],
+                  noEventMessage: "",
+                }),
+                annotations: [
+                  {
+                    type: "url_citation",
+                    url: officialUrl,
+                    title: "Visit Busan 행사 안내",
+                  },
+                ],
+              },
+            ],
+          },
+        ],
+        usage: {
+          input_tokens: 100,
+          output_tokens: 80,
+          total_tokens: 180,
+        },
+      }),
+      {
+        status: 200,
+        headers: { "content-type": "application/json" },
+      },
+    );
+  };
+
+  await withServer(
+    async (baseUrl) => {
+      const created = await fetch(`${baseUrl}/api/outings`, {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({
+          title: "광안리 여름밤",
+          placeId: "gwangalli",
+          startsAt: "2026-08-08T19:00:00+09:00",
+          activityType: "festival",
+          expectedPeople: 4,
+          creatorName: "현우",
+          itemKeys: ["water", "battery"],
+        }),
+      }).then((response) => response.json());
+      const outingId = created.outing.outing.id;
+      const headers = {
+        authorization: `Bearer ${created.session.token}`,
+      };
+
+      const intelligenceResponse = await fetch(
+        `${baseUrl}/api/outings/${outingId}/place-intelligence`,
+        { headers },
+      );
+      assert.equal(intelligenceResponse.status, 200);
+      const intelligence = await intelligenceResponse.json();
+      assert.equal(intelligence.crowd.mode, "estimate");
+      assert.match(intelligence.crowd.label, /예상/);
+      assert.equal(intelligence.crowd.source.url, null);
+
+      const firstResponse = await fetch(
+        `${baseUrl}/api/outings/${outingId}/summer-events`,
+        { method: "POST", headers },
+      );
+      assert.equal(firstResponse.status, 201);
+      const first = await firstResponse.json();
+      assert.equal(first.events.events.length, 1);
+      assert.equal(first.events.events[0].sourceUrl, officialUrl);
+      assert.equal(first.meta.cached, false);
+
+      const secondResponse = await fetch(
+        `${baseUrl}/api/outings/${outingId}/summer-events`,
+        { method: "POST", headers },
+      );
+      assert.equal(secondResponse.status, 200);
+      assert.equal((await secondResponse.json()).meta.cached, true);
+      assert.equal(openAiCalls, 1);
+    },
+    {
+      openAiApiKey: "test-key",
+      fetchImpl,
+    },
+  );
+});
+
 test("AI 브리핑은 참여자만 생성하고 같은 준비 상태에서는 캐시한다", async () => {
   const openAiRequests = [];
   const briefing = {

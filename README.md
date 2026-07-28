@@ -47,6 +47,10 @@ API와 웹을 따로 실행하려면 `npm run dev:api`, `npm run dev:web`을 사
 - 장소·날짜 기반 Open-Meteo 실제 예보
 - 30분 날씨 캐시
 - AI 결과 12시간 D1 캐시와 모임별 24시간 8회 생성 제한
+- 추천 장소의 현재 예상 혼잡도와 근거 표시
+- 서울 OpenAPI 지원 장소의 공식 실시간 혼잡도 자동 전환
+- 공식·주최자·지자체 원문 출처를 검증하는 AI 여름 행사 검색
+- 행사 검색 6시간 D1 캐시와 모임별 24시간 3회 제한
 - 2.5초 주기 공동 상태 동기화
 
 ## 검증과 번들 생성
@@ -77,6 +81,7 @@ npm run test:worker
 npm run db:migrate:remote
 npm run deploy:worker
 npm run test:ai-live
+npm run test:intel-live
 ```
 
 Node.js + SQLite API는 빠른 로컬 개발과 계약 회귀 테스트용으로 계속 유지합니다.
@@ -97,6 +102,21 @@ npx wrangler secret put OPENAI_API_KEY
 - 송신 위치: 미국 동부 위치 힌트를 준 SQLite Durable Object
 - 이유: 한국 사용자 요청을 처리하는 홍콩 엣지의 OpenAI 지역 제한 회피
 - 비용 방어: 준비 상태 지문별 12시간 재사용, 모임별 하루 8개 상태 제한
+
+AI 행사 검색도 같은 Worker secret과 Responses API를 사용합니다. 버튼을
+누를 때 장소·날짜·활동 유형만 전송하며, 참가자 이름과 준비물은 보내지
+않습니다. 웹 검색 결과 URL이 OpenAI가 실제로 반환한 출처 목록에 있는
+행사만 노출합니다.
+
+서울 주요 장소의 공식 실시간 혼잡도를 사용하려면 서울 열린데이터광장에서
+키를 발급받아 선택 secret을 추가합니다.
+
+```bash
+npx wrangler secret put SEOUL_OPEN_DATA_API_KEY
+```
+
+키가 없거나 서울시 지원 범위 밖이면 요일·시간·계절·장소 인기도를 조합한
+참고용 값을 `예상 혼잡도`라고 명확히 표시합니다.
 
 ## 콘솔 업로드 전 필수 수정
 

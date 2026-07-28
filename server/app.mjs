@@ -9,6 +9,10 @@ import {
   getBriefingState,
 } from "./ai-briefing.mjs";
 import {
+  estimateCurrentCrowd,
+  getCurrentCrowdIntelligence,
+} from "./crowd-intelligence.mjs";
+import {
   getItemOption,
   ITEM_OPTIONS,
   MAX_ITEMS,
@@ -26,6 +30,13 @@ import {
   getActivityType,
   getSmartPackingRecommendations,
 } from "./smart-packing.mjs";
+import {
+  generateSummerEvents,
+  getSummerEventSearchState,
+  SUMMER_EVENT_CACHE_TTL_MS,
+  SUMMER_EVENT_DAILY_LIMIT,
+  SUMMER_EVENT_MODEL,
+} from "./summer-events.mjs";
 import {
   getForecastWeather,
   getOutingWeather,
@@ -81,10 +92,15 @@ export function createApiServer({
   weatherEnabled = true,
   openAiApiKey = process.env.OPENAI_API_KEY ?? "",
   aiModel = AI_BRIEFING_MODEL,
+  eventModel = SUMMER_EVENT_MODEL,
+  seoulOpenDataApiKey = process.env.SEOUL_OPEN_DATA_API_KEY ?? "",
 }) {
   const store = createStore(dbFile);
   const aiBriefingCache = new Map();
   const aiBriefingUsage = new Map();
+  const crowdCache = new Map();
+  const summerEventCache = new Map();
+  const summerEventUsage = new Map();
 
   async function enrichBundle(bundle) {
     if (bundle.status !== "ok") return bundle;
@@ -187,6 +203,140 @@ export function createApiServer({
     }
   }
 
+  function outingPlace(outing) {
+    return (
+      getPlace(outing.placeId) ?? {
+        id: outing.placeId,
+        name: outing.placeName,
+        latitude: outing.latitude,
+        longitude: outing.longitude,
+        city: outing.placeName.split(",").at(-1)?.trim() || "대한민국",
+        crowdBaseline: 45,
+      }
+    );
+  }
+
+  async function getPlaceIntelligence(request, response, outingId) {
+    const bundle = store.getOutingBundle(outingId, {
+      token: bearerToken(request),
+    });
+    if (bundle.status === "not_found") {
+      json(response, 404, { error: "모임을 찾지 못했어요." });
+      return;
+    }
+    if (bundle.status !== "ok" || !bundle.viewer) {
+      json(response, 403, { error: "참여자 권한이 필요해요." });
+      return;
+    }
+
+    const place = outingPlace(bundle.outing);
+    const now = Date.now();
+    const cached = crowdCache.get(place.id);
+    if (cached && cached.expiresAt > now) {
+      json(response, 200, {
+        crowd: cached.crowd,
+        meta: { cached: true, expiresAt: cached.expiresAt },
+      });
+      return;
+    }
+
+    const crowd = await getCurrentCrowdIntelligence({
+      place,
+      apiKey: seoulOpenDataApiKey,
+      fetchImpl,
+    });
+    const expiresAt = now + 5 * 60 * 1000;
+    crowdCache.set(place.id, { crowd, expiresAt });
+    json(response, 200, {
+      crowd,
+      meta: { cached: false, expiresAt },
+    });
+  }
+
+  async function getSummerEvents(request, response, outingId) {
+    const bundle = store.getOutingBundle(outingId, {
+      token: bearerToken(request),
+    });
+    if (bundle.status === "not_found") {
+      json(response, 404, { error: "모임을 찾지 못했어요." });
+      return;
+    }
+    if (bundle.status !== "ok" || !bundle.viewer) {
+      json(response, 403, { error: "참여자 권한이 필요해요." });
+      return;
+    }
+    if (!openAiApiKey) {
+      json(response, 503, {
+        error: "AI 행사 검색을 준비하고 있어요. 잠시 후 다시 시도해 주세요.",
+      });
+      return;
+    }
+
+    const place = outingPlace(bundle.outing);
+    const now = Date.now();
+    const { searchKey } = await getSummerEventSearchState({
+      outing: bundle.outing,
+      place,
+      now: new Date(now),
+    });
+    const cacheKey = `${outingId}:${searchKey}`;
+    const cached = summerEventCache.get(cacheKey);
+    if (cached && cached.meta.expiresAt > now) {
+      json(response, 200, {
+        events: cached.events,
+        meta: { ...cached.meta, cached: true },
+      });
+      return;
+    }
+
+    const usage = (summerEventUsage.get(outingId) ?? []).filter(
+      (createdAt) => createdAt > now - 24 * 60 * 60 * 1000,
+    );
+    summerEventUsage.set(outingId, usage);
+    if (usage.length >= SUMMER_EVENT_DAILY_LIMIT) {
+      json(response, 429, {
+        error: "오늘 행사 검색을 충분히 했어요. 내일 다시 찾아볼게요.",
+      });
+      return;
+    }
+
+    try {
+      const generated = await generateSummerEvents({
+        outing: bundle.outing,
+        place,
+        apiKey: openAiApiKey,
+        fetchImpl,
+        model: eventModel,
+        now: new Date(now),
+      });
+      const generatedAt = Date.now();
+      const result = {
+        events: generated.result,
+        meta: {
+          cached: false,
+          generatedAt,
+          expiresAt: generatedAt + SUMMER_EVENT_CACHE_TTL_MS,
+          model: generated.model,
+          searchKey: generated.searchKey,
+          sourceCount: generated.sourceCount,
+        },
+      };
+      summerEventCache.set(cacheKey, result);
+      summerEventUsage.set(outingId, [...usage, generatedAt]);
+      json(response, 201, result);
+    } catch (error) {
+      console.error("summer_event_search_failed", {
+        outingId,
+        code: error?.message ?? "unknown",
+        status: error?.status ?? null,
+        apiCode: error?.apiCode ?? null,
+      });
+      json(response, 502, {
+        error: "행사 정보를 확인하지 못했어요. 잠시 후 다시 시도해 주세요.",
+      });
+    }
+  }
+
   const server = createServer(async (request, response) => {
     if (request.method === "OPTIONS") {
       json(response, 204, {});
@@ -203,7 +353,16 @@ export function createApiServer({
       }
 
       if (request.method === "GET" && path === "/api/places") {
-        json(response, 200, { places: PLACES });
+        json(response, 200, {
+          places: PLACES.map((place) => ({
+            id: place.id,
+            name: place.name,
+            latitude: place.latitude,
+            longitude: place.longitude,
+            city: place.city,
+            currentCrowd: estimateCurrentCrowd(place),
+          })),
+        });
         return;
       }
 
@@ -381,6 +540,26 @@ export function createApiServer({
       );
       if (request.method === "POST" && aiBriefingMatch) {
         await getAiBriefing(request, response, aiBriefingMatch[1]);
+        return;
+      }
+
+      const placeIntelligenceMatch = path.match(
+        /^\/api\/outings\/([^/]+)\/place-intelligence$/,
+      );
+      if (request.method === "GET" && placeIntelligenceMatch) {
+        await getPlaceIntelligence(
+          request,
+          response,
+          placeIntelligenceMatch[1],
+        );
+        return;
+      }
+
+      const summerEventsMatch = path.match(
+        /^\/api\/outings\/([^/]+)\/summer-events$/,
+      );
+      if (request.method === "POST" && summerEventsMatch) {
+        await getSummerEvents(request, response, summerEventsMatch[1]);
         return;
       }
 

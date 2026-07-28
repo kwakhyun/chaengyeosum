@@ -6,7 +6,9 @@ import type {
   OutingWeather,
   ParticipantSession,
   Place,
+  PlaceIntelligenceResponse,
   SmartRecommendation,
+  SummerEventResponse,
 } from "./types";
 
 const DEFAULT_PRODUCTION_API =
@@ -121,6 +123,22 @@ export function getOuting(
 export function createAiBriefing(outingId: string, token: string) {
   return request<AiBriefingResponse>(
     `/outings/${encodeURIComponent(outingId)}/ai-briefing`,
+    { method: "POST" },
+    token,
+  );
+}
+
+export function getPlaceIntelligence(outingId: string, token: string) {
+  return request<PlaceIntelligenceResponse>(
+    `/outings/${encodeURIComponent(outingId)}/place-intelligence`,
+    {},
+    token,
+  );
+}
+
+export function searchSummerEvents(outingId: string, token: string) {
+  return request<SummerEventResponse>(
+    `/outings/${encodeURIComponent(outingId)}/summer-events`,
     { method: "POST" },
     token,
   );

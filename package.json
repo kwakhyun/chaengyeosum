@@ -12,6 +12,7 @@
     "test:api": "node --test server/*.test.mjs",
     "test:worker": "node worker/smoke.mjs",
     "test:ai-live": "node worker/ai-smoke.mjs",
+    "test:intel-live": "node worker/intel-smoke.mjs",
     "db:migrate:local": "wrangler d1 migrations apply chaengyeosum-prod --local",
     "db:migrate:remote": "wrangler d1 migrations apply chaengyeosum-prod --remote",
     "deploy:worker": "wrangler deploy",

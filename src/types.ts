@@ -3,6 +3,61 @@ export interface Place {
   name: string;
   latitude: number;
   longitude: number;
+  city?: string;
+  currentCrowd?: CrowdSignal;
+}
+
+export interface CrowdSignal {
+  mode: "live" | "estimate";
+  level: "relaxed" | "normal" | "busy" | "very_busy";
+  label: string;
+  score: number;
+  summary: string;
+  reasons: string[];
+  populationRange: string | null;
+  observedAt: string;
+  source: {
+    name: string;
+    url: string | null;
+    note: string;
+  };
+  liveSupported: boolean;
+}
+
+export interface PlaceIntelligenceResponse {
+  crowd: CrowdSignal;
+  meta: {
+    cached: boolean;
+    expiresAt: number;
+  };
+}
+
+export interface SummerEvent {
+  title: string;
+  dateLabel: string;
+  venue: string;
+  why: string;
+  sourceTitle: string;
+  sourceUrl: string;
+}
+
+export interface SummerEventSearch {
+  headline: string;
+  searchSummary: string;
+  events: SummerEvent[];
+  noEventMessage: string;
+}
+
+export interface SummerEventResponse {
+  events: SummerEventSearch;
+  meta: {
+    cached: boolean;
+    generatedAt: number;
+    expiresAt: number;
+    model: string;
+    searchKey: string;
+    sourceCount?: number;
+  };
 }
 
 export interface Participant {
