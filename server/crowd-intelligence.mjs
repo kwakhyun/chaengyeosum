@@ -50,7 +50,12 @@ function placeKind(place) {
   ) {
     return "waterpark";
   }
-  if (place.name.includes("해수욕장")) return "beach";
+  if (place.category === "beach" || place.name.includes("해수욕장")) {
+    return "beach";
+  }
+  if (place.category === "valley" || place.name.includes("계곡")) {
+    return "valley";
+  }
   if (place.name.includes("한강") || place.name.includes("공원")) {
     return "park";
   }
@@ -73,7 +78,7 @@ export function estimateCurrentCrowd(place, now = new Date()) {
 
   if (hour >= 18 && hour <= 21) {
     score +=
-      kind === "park" || kind === "beach"
+      kind === "park" || kind === "beach" || kind === "valley"
         ? 14
         : kind === "waterpark"
           ? 4
@@ -93,7 +98,12 @@ export function estimateCurrentCrowd(place, now = new Date()) {
   if (
     month >= 6 &&
     month <= 8 &&
-    (kind === "park" || kind === "beach" || kind === "waterpark")
+    (
+      kind === "park" ||
+      kind === "beach" ||
+      kind === "valley" ||
+      kind === "waterpark"
+    )
   ) {
     score += kind === "waterpark" ? 12 : 8;
     reasons.push(

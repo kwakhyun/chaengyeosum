@@ -250,6 +250,9 @@ export function createStore(filename) {
     deleteItem: db.prepare(`
       DELETE FROM checklist_items WHERE id = ? AND outing_id = ?
     `),
+    deleteOuting: db.prepare(`
+      DELETE FROM outings WHERE id = ?
+    `),
     getWeather: db.prepare(`
       SELECT payload, fetched_at FROM weather_cache WHERE outing_id = ?
     `),
@@ -471,6 +474,7 @@ export function createStore(filename) {
       items,
       events,
       viewer,
+      canDelete: Boolean(viewer && participants[0]?.id === viewer.id),
     };
   }
 
@@ -558,6 +562,19 @@ export function createStore(filename) {
     if (Number(result.changes) > 0) {
       addEvent(outingId, viewer.id, "item_deleted", item.label);
     }
+    return Number(result.changes) > 0
+      ? { status: "ok" }
+      : { status: "not_found" };
+  }
+
+  function deleteOuting({ outingId, token }) {
+    const viewer = authorize(outingId, token);
+    if (!viewer) return { status: "forbidden" };
+    const creator = statements.getParticipants.get(outingId);
+    if (!creator || creator.id !== viewer.id) {
+      return { status: "not_creator" };
+    }
+    const result = statements.deleteOuting.run(outingId);
     return Number(result.changes) > 0
       ? { status: "ok" }
       : { status: "not_found" };
@@ -671,6 +688,7 @@ export function createStore(filename) {
     completeMyItems,
     createOuting,
     deleteItem,
+    deleteOuting,
     getOutingBundle,
     getWeatherCache,
     joinOuting,

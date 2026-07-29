@@ -6,6 +6,17 @@ import {
 
 import type { Place } from "../types";
 
+const CATEGORY_META: Record<
+  NonNullable<Place["category"]>,
+  { label: string; emoji: string }
+> = {
+  hangang: { label: "한강", emoji: "🏙️" },
+  beach: { label: "해변", emoji: "🏄" },
+  waterpark: { label: "워터파크", emoji: "🌊" },
+  valley: { label: "계곡", emoji: "🏞️" },
+  park: { label: "도심 숲", emoji: "🌳" },
+};
+
 export function PopularSummerPlaces({
   places,
   onCreateOuting,
@@ -13,10 +24,12 @@ export function PopularSummerPlaces({
   places: Place[];
   onCreateOuting: (place: Place) => void;
 }) {
-  const waterparks = places.filter(
-    (place) => place.category === "waterpark",
+  const summerPlaces = places.filter(
+    (place) =>
+      place.category !== "hangang" &&
+      Boolean(place.tagline && place.summerTip && place.highlights?.length),
   );
-  if (waterparks.length === 0) return null;
+  if (summerPlaces.length === 0) return null;
 
   return (
     <section
@@ -25,23 +38,24 @@ export function PopularSummerPlaces({
     >
       <div className="popular-summer-places__heading">
         <div>
-          <p className="eyebrow">WATERPARK PICKS</p>
-          <h2 id="popular-summer-places-title">이번 여름, 어디로 갈까?</h2>
+          <p className="eyebrow">SUMMER PICKS</p>
+          <h2 id="popular-summer-places-title">여름 모임, 어디서 할까?</h2>
         </div>
         <span>
           <SunIcon aria-hidden="true" />
-          인기 물놀이
+          모임 추천
         </span>
       </div>
 
       <div className="popular-summer-places__track">
-        {waterparks.map((place) => {
+        {summerPlaces.map((place) => {
           const crowd = place.currentCrowd;
+          const category = CATEGORY_META[place.category ?? "park"];
           return (
             <article className="popular-summer-place-card" key={place.id}>
               <header>
                 <div>
-                  <span>워터파크</span>
+                  <span>{category.label}</span>
                   <small>{place.city}</small>
                 </div>
                 {crowd ? (
@@ -57,11 +71,19 @@ export function PopularSummerPlaces({
                 <div className="popular-summer-place-card__image">
                   <img
                     src={place.imageUrl}
-                    alt={`${place.name} 물놀이 풍경을 표현한 3D 일러스트`}
+                    alt={`${place.name}의 여름 풍경을 표현한 3D 일러스트`}
                     loading="lazy"
                   />
                 </div>
-              ) : null}
+              ) : (
+                <div
+                  className={`popular-summer-place-card__image popular-summer-place-card__image--${place.category ?? "park"}`}
+                  role="img"
+                  aria-label={`${place.name} ${category.label} 일러스트`}
+                >
+                  <span aria-hidden="true">{category.emoji}</span>
+                </div>
+              )}
 
               <h3>{place.name}</h3>
               <p>{place.tagline}</p>

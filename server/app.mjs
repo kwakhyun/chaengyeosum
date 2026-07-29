@@ -542,6 +542,27 @@ export function createApiServer({
       }
 
       const outingMatch = path.match(/^\/api\/outings\/([^/]+)$/);
+      if (request.method === "DELETE" && outingMatch) {
+        const result = store.deleteOuting({
+          outingId: outingMatch[1],
+          token: bearerToken(request),
+        });
+        if (
+          result.status === "forbidden" ||
+          result.status === "not_creator"
+        ) {
+          json(response, 403, {
+            error: "모임을 만든 사람만 삭제할 수 있어요.",
+          });
+          return;
+        }
+        if (result.status === "not_found") {
+          json(response, 404, { error: "모임을 찾지 못했어요." });
+          return;
+        }
+        json(response, 200, { ok: true });
+        return;
+      }
       if (request.method === "GET" && outingMatch) {
         const outingId = outingMatch[1];
         const bundle = store.getOutingBundle(outingId, {

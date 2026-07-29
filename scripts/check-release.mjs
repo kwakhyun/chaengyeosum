@@ -102,13 +102,21 @@ const checks = [
       app.includes('requestedTab === "type"'),
   },
   {
-    name: "여름 인기 워터파크 정보와 모임 생성 진입점 제공",
+    name: "다양한 여름 장소 정보와 모임 생성 진입점 제공",
     pass:
       app.includes("<PopularSummerPlaces") &&
-      popularSummerPlaces.includes('place.category === "waterpark"') &&
+      popularSummerPlaces.includes('place.category !== "hangang"') &&
       popularSummerPlaces.includes("place.imageUrl") &&
       popularSummerPlaces.includes("이 장소로 모임 만들기") &&
       popularSummerPlaces.includes("참고용 예상치"),
+  },
+  {
+    name: "생성자 전용 모임 삭제 확인 흐름 제공",
+    pass:
+      app.includes("confirmDeleteOuting") &&
+      app.includes("삭제하면 초대받은 친구도 더 이상") &&
+      source.includes('method: "DELETE"') &&
+      source.includes("removeSession"),
   },
   {
     name: "확대·축소 제스처 비활성화",

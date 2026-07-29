@@ -135,6 +135,14 @@ export function getOuting(
   );
 }
 
+export function deleteOuting(outingId: string, token: string) {
+  return request<{ ok: true }>(
+    `/outings/${encodeURIComponent(outingId)}`,
+    { method: "DELETE" },
+    token,
+  );
+}
+
 export function createAiBriefing(outingId: string, token: string) {
   return request<AiBriefingResponse>(
     `/outings/${encodeURIComponent(outingId)}/ai-briefing`,

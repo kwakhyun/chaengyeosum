@@ -290,6 +290,63 @@ test("초대 코드나 참여 토큰이 없으면 모임을 읽을 수 없다", 
   });
 });
 
+test("모임은 최초 생성자만 삭제할 수 있고 삭제 후에는 조회되지 않는다", async () => {
+  await withServer(async (baseUrl) => {
+    const createResponse = await fetch(`${baseUrl}/api/outings`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        title: "삭제 권한 확인 모임",
+        placeId: "seoul-forest",
+        startsAt: "2026-08-10T18:00:00+09:00",
+        activityType: "picnic",
+        expectedPeople: 3,
+        creatorName: "모임장",
+        itemKeys: ["water", "mat"],
+        customItems: [],
+      }),
+    });
+    const created = await createResponse.json();
+    const outingId = created.outing.outing.id;
+
+    const joinResponse = await fetch(
+      `${baseUrl}/api/outings/${outingId}/join`,
+      {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({
+          inviteCode: created.outing.outing.inviteCode,
+          name: "친구",
+        }),
+      },
+    );
+    const joined = await joinResponse.json();
+
+    const denied = await fetch(`${baseUrl}/api/outings/${outingId}`, {
+      method: "DELETE",
+      headers: {
+        authorization: `Bearer ${joined.session.token}`,
+      },
+    });
+    assert.equal(denied.status, 403);
+
+    const deleted = await fetch(`${baseUrl}/api/outings/${outingId}`, {
+      method: "DELETE",
+      headers: {
+        authorization: `Bearer ${created.session.token}`,
+      },
+    });
+    assert.equal(deleted.status, 200);
+
+    const missing = await fetch(`${baseUrl}/api/outings/${outingId}`, {
+      headers: {
+        authorization: `Bearer ${created.session.token}`,
+      },
+    });
+    assert.equal(missing.status, 404);
+  });
+});
+
 test("준비물은 1개 이상 15개 이하로 유지된다", async () => {
   await withServer(async (baseUrl) => {
     const options = await fetch(`${baseUrl}/api/item-options`).then(
@@ -425,6 +482,36 @@ test("장소 목록에 여름 인기 워터파크와 방문 정보를 제공한�
           place.imageUrl.startsWith("/assets/waterpark-") &&
           place.officialUrl.startsWith("https://") &&
           place.currentCrowd.mode === "estimate",
+      ),
+    );
+  });
+});
+
+test("한강과 워터파크 외 여름 모임 장소를 다양하게 제공한다", async () => {
+  await withServer(async (baseUrl) => {
+    const response = await fetch(`${baseUrl}/api/places`);
+    const payload = await response.json();
+    const summerPlaceIds = [
+      "songjeong-beach",
+      "baegun-valley",
+      "seoul-forest",
+    ];
+    const summerPlaces = payload.places.filter((place) =>
+      summerPlaceIds.includes(place.id),
+    );
+
+    assert.equal(summerPlaces.length, 3);
+    assert.deepEqual(
+      summerPlaces.map((place) => place.category),
+      ["beach", "valley", "park"],
+    );
+    assert.ok(
+      summerPlaces.every(
+        (place) =>
+          place.tagline &&
+          place.highlights.length === 3 &&
+          place.summerTip &&
+          place.officialUrl.startsWith("https://"),
       ),
     );
   });

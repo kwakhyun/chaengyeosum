@@ -4,7 +4,7 @@ export interface Place {
   latitude: number;
   longitude: number;
   city?: string;
-  category?: "hangang" | "beach" | "waterpark";
+  category?: "hangang" | "beach" | "waterpark" | "valley" | "park";
   tagline?: string;
   highlights?: string[];
   summerTip?: string;
@@ -170,6 +170,7 @@ export interface OutingBundle {
   items: PackingItem[];
   events: OutingEvent[];
   viewer: Participant | null;
+  canDelete: boolean;
   weather: OutingWeather | null;
   smartRecommendations: SmartRecommendation[];
 }

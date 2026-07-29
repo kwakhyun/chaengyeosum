@@ -323,6 +323,7 @@ async function getOutingBundle(
     items,
     events,
     viewer,
+    canDelete: Boolean(viewer && participants[0]?.id === viewer.id),
   };
 }
 
@@ -1086,6 +1087,36 @@ async function deleteItem(request, db, outingId, itemId) {
   return json(request, 200, { ok: true });
 }
 
+async function deleteOuting(request, db, outingId) {
+  const viewer = await authorize(db, outingId, bearerToken(request));
+  if (!viewer) {
+    return json(request, 403, {
+      error: "모임을 만든 사람만 삭제할 수 있어요.",
+    });
+  }
+  const creator = await first(
+    db,
+    `SELECT id FROM participants
+     WHERE outing_id = ?
+     ORDER BY joined_at ASC, rowid ASC
+     LIMIT 1`,
+    [outingId],
+  );
+  if (!creator || creator.id !== viewer.id) {
+    return json(request, 403, {
+      error: "모임을 만든 사람만 삭제할 수 있어요.",
+    });
+  }
+  const result = await db
+    .prepare("DELETE FROM outings WHERE id = ?")
+    .bind(outingId)
+    .run();
+  if (Number(result.meta?.changes ?? 0) === 0) {
+    return json(request, 404, { error: "모임을 찾지 못했어요." });
+  }
+  return json(request, 200, { ok: true });
+}
+
 async function completeMine(request, db, outingId) {
   const viewer = await authorize(db, outingId, bearerToken(request));
   if (!viewer) {
@@ -1367,6 +1398,9 @@ async function handleRequest(request, env) {
   }
 
   const outingMatch = path.match(/^\/api\/outings\/([^/]+)$/);
+  if (request.method === "DELETE" && outingMatch) {
+    return deleteOuting(request, db, outingMatch[1]);
+  }
   if (request.method === "GET" && outingMatch) {
     const bundle = await getOutingBundle(db, outingMatch[1], {
       token: bearerToken(request),

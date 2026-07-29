@@ -38,3 +38,10 @@ export function saveSession(session: ParticipantSession, outing: Outing) {
     JSON.stringify([next, ...sessions].slice(0, 8)),
   );
 }
+
+export function removeSession(outingId: string) {
+  const sessions = loadAll().filter(
+    (session) => session.outingId !== outingId,
+  );
+  window.localStorage.setItem(STORAGE_KEY, JSON.stringify(sessions));
+}

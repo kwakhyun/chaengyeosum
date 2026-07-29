@@ -50,6 +50,7 @@ import {
   createAiBriefing,
   createOuting,
   deleteItem,
+  deleteOuting,
   getPlaceIntelligence,
   getPackingRecommendations,
   getOuting,
@@ -79,6 +80,7 @@ import { WeatherHighlightsCarousel } from "./components/WeatherHighlightsCarouse
 import {
   getSavedSessions,
   getSession,
+  removeSession,
   saveSession,
 } from "./session";
 import type {
@@ -437,6 +439,27 @@ function currentOutingId() {
 type HomeTab = "home" | "places" | "type" | "outings";
 type CreateStep = 1 | 2 | 3 | 4;
 
+const HOME_PLACE_ORDER = [
+  "yeouido-hangang",
+  "caribbean-bay",
+  "songjeong-beach",
+  "baegun-valley",
+  "seoul-forest",
+  "ocean-world",
+  "gimhae-lotte-waterpark",
+];
+
+function weatherRegionIdForPlace(place: Place | null) {
+  if (!place) return "seoul";
+  const location = `${place.city ?? ""} ${place.name}`;
+  if (location.includes("부산") || location.includes("김해")) return "busan";
+  if (location.includes("강원") || location.includes("홍천")) {
+    return "gangneung";
+  }
+  if (location.includes("제주")) return "jeju";
+  return "seoul";
+}
+
 function getInitialHomeTab(sharedSummerType: SummerTypeKey | null): HomeTab {
   const requestedTab = new URLSearchParams(window.location.search).get("tab");
   if (
@@ -464,13 +487,14 @@ function OutingList({
   sessions,
   summaries,
   onOpenOuting,
+  onDeleteOuting,
+  deletingOutingId,
 }: {
   sessions: SavedSession[];
-  summaries: Map<
-    string,
-    { ready: number; total: number; unassigned: number }
-  >;
+  summaries: Map<string, OutingSummary>;
   onOpenOuting: (outingId: string) => void;
+  onDeleteOuting?: (session: SavedSession) => void;
+  deletingOutingId?: string | null;
 }) {
   if (sessions.length === 0) {
     return (
@@ -491,41 +515,63 @@ function OutingList({
             ? Math.round((summary.ready / summary.total) * 100)
             : 0;
         return (
-          <button
-            className="outing-card"
-            type="button"
+          <article
+            className={`outing-card-row${onDeleteOuting ? " has-delete" : ""}`}
             key={session.outingId}
-            onClick={() => onOpenOuting(session.outingId)}
           >
-            <span className="outing-card__icon">
-              <CalendarIcon aria-hidden="true" />
-            </span>
-            <span className="outing-card__copy">
-              <strong>{session.title}</strong>
-              <span>
-                {formatDateLabel(session.startsAt)} · {session.placeName}
+            <button
+              className="outing-card"
+              type="button"
+              onClick={() => onOpenOuting(session.outingId)}
+            >
+              <span className="outing-card__icon">
+                <CalendarIcon aria-hidden="true" />
               </span>
-              {summary ? (
-                <span className="outing-card__status">
-                  <i aria-hidden="true">
-                    <i style={{ width: `${percent}%` }} />
-                  </i>
-                  <b>
-                    {summary.ready}/{summary.total} 준비
-                    {summary.unassigned > 0
-                      ? ` · ${summary.unassigned}개 주인 찾는 중`
-                      : ""}
-                  </b>
+              <span className="outing-card__copy">
+                <strong>{session.title}</strong>
+                <span>
+                  {formatDateLabel(session.startsAt)} · {session.placeName}
                 </span>
-              ) : null}
-            </span>
-            <ChevronRightIcon aria-hidden="true" />
-          </button>
+                {summary ? (
+                  <span className="outing-card__status">
+                    <i aria-hidden="true">
+                      <i style={{ width: `${percent}%` }} />
+                    </i>
+                    <b>
+                      {summary.ready}/{summary.total} 준비
+                      {summary.unassigned > 0
+                        ? ` · ${summary.unassigned}개 주인 찾는 중`
+                        : ""}
+                    </b>
+                  </span>
+                ) : null}
+              </span>
+              <ChevronRightIcon aria-hidden="true" />
+            </button>
+            {onDeleteOuting && summary?.canDelete ? (
+              <button
+                className="outing-card-delete"
+                type="button"
+                aria-label={`${session.title} 모임 삭제`}
+                disabled={deletingOutingId === session.outingId}
+                onClick={() => onDeleteOuting(session)}
+              >
+                <TrashIcon aria-hidden="true" />
+              </button>
+            ) : null}
+          </article>
         );
       })}
     </div>
   );
 }
+
+type OutingSummary = {
+  ready: number;
+  total: number;
+  unassigned: number;
+  canDelete: boolean;
+};
 
 export default function App() {
   const [outingId, setOutingId] = useState(currentOutingId);
@@ -597,8 +643,14 @@ function HomePage({
   const [customDraft, setCustomDraft] = useState("");
   const [sessions, setSessions] = useState<SavedSession[]>(getSavedSessions);
   const [outingSummaries, setOutingSummaries] = useState<
-    Map<string, { ready: number; total: number; unassigned: number }>
+    Map<string, OutingSummary>
   >(new Map());
+  const [deleteTarget, setDeleteTarget] = useState<SavedSession | null>(null);
+  const [deletingOutingId, setDeletingOutingId] = useState<string | null>(
+    null,
+  );
+  const [deleteError, setDeleteError] = useState("");
+  const [deleteNotice, setDeleteNotice] = useState("");
   const [customPlaceMode, setCustomPlaceMode] = useState(false);
   const [customPlaceQuery, setCustomPlaceQuery] = useState("");
   const [customPlaceResults, setCustomPlaceResults] = useState<Place[]>([]);
@@ -631,13 +683,16 @@ function HomePage({
   );
   const [homeHighlightIndex, setHomeHighlightIndex] = useState(0);
   const [homeHighlightPaused, setHomeHighlightPaused] = useState(false);
-  const rotatingCrowdHighlights = useMemo(
-    () =>
-      crowdHighlights
-        .filter((place) => place.currentCrowd != null)
-        .slice(0, 4),
-    [crowdHighlights],
-  );
+  const rotatingHomePlaces = useMemo(() => {
+    const liveCrowdById = new Map(
+      crowdHighlights.map((place) => [place.id, place]),
+    );
+    const placeById = new Map(places.map((place) => [place.id, place]));
+    return HOME_PLACE_ORDER.flatMap((id) => {
+      const place = liveCrowdById.get(id) ?? placeById.get(id);
+      return place?.currentCrowd ? [place] : [];
+    });
+  }, [crowdHighlights, places]);
 
   useEffect(() => {
     Promise.all([listPlaces(), listItemOptions()])
@@ -701,29 +756,29 @@ function HomePage({
   }, []);
 
   useEffect(() => {
-    if (homeHighlightIndex < rotatingCrowdHighlights.length) return;
+    if (homeHighlightIndex < rotatingHomePlaces.length) return;
     setHomeHighlightIndex(0);
-  }, [homeHighlightIndex, rotatingCrowdHighlights.length]);
+  }, [homeHighlightIndex, rotatingHomePlaces.length]);
 
   useEffect(() => {
     if (
       activeTab !== "home" ||
       homeHighlightPaused ||
-      rotatingCrowdHighlights.length <= 1 ||
+      rotatingHomePlaces.length <= 1 ||
       window.matchMedia("(prefers-reduced-motion: reduce)").matches
     ) {
       return;
     }
     const timer = window.setInterval(() => {
       setHomeHighlightIndex(
-        (current) => (current + 1) % rotatingCrowdHighlights.length,
+        (current) => (current + 1) % rotatingHomePlaces.length,
       );
     }, 5_500);
     return () => window.clearInterval(timer);
   }, [
     activeTab,
     homeHighlightPaused,
-    rotatingCrowdHighlights.length,
+    rotatingHomePlaces.length,
   ]);
 
   useEffect(() => {
@@ -770,6 +825,7 @@ function HomePage({
             total: bundle.items.length,
             unassigned: bundle.items.filter((item) => item.owner == null)
               .length,
+            canDelete: bundle.canDelete,
           },
         ] as const;
       }),
@@ -946,16 +1002,46 @@ function HomePage({
     setCreateOpen(true);
   };
   const startCreateAtPlace = (place: Place) => {
+    const waterActivity = ["waterpark", "beach", "valley"].includes(
+      place.category ?? "",
+    );
     setCustomPlaceMode(false);
     setSelectedCustomPlace(null);
     setForm((current) => ({
       ...current,
-      title: `${place.name} 물놀이`,
+      title: `${place.name} ${waterActivity ? "물놀이" : "피크닉"}`,
       placeId: place.id,
-      activityType: "water-play",
+      activityType: waterActivity ? "water-play" : "picnic",
     }));
     openCreateSheet();
     track("popular_summer_place_selected", { place_id: place.id });
+  };
+
+  const requestDeleteOuting = (session: SavedSession) => {
+    setDeleteError("");
+    setDeleteTarget(session);
+  };
+
+  const confirmDeleteOuting = async () => {
+    if (!deleteTarget || deletingOutingId) return;
+    setDeletingOutingId(deleteTarget.outingId);
+    setDeleteError("");
+    try {
+      await deleteOuting(deleteTarget.outingId, deleteTarget.token);
+      removeSession(deleteTarget.outingId);
+      setSessions(getSavedSessions());
+      setDeleteNotice(`‘${deleteTarget.title}’ 모임을 삭제했어요.`);
+      track("outing_deleted", { outing_id: deleteTarget.outingId });
+      setDeleteTarget(null);
+    } catch (deleteFailure) {
+      setDeleteError(
+        deleteFailure instanceof Error
+          ? deleteFailure.message
+          : "모임을 삭제하지 못했어요.",
+      );
+    } finally {
+      setDeletingOutingId(null);
+    }
   };
   const closeCreateSheet = () => {
     setCreateOpen(false);
@@ -1122,22 +1208,27 @@ function HomePage({
     return shareResult;
   };
   const featuredCrowdPlace =
-    rotatingCrowdHighlights[homeHighlightIndex] ??
-    crowdHighlights[0] ??
+    rotatingHomePlaces[homeHighlightIndex] ??
+    places[0] ??
     null;
   const featuredCrowd = featuredCrowdPlace?.currentCrowd ?? null;
-  const featuredWeather =
-    weatherHighlights.find((region) => region.id === "seoul")?.weather ??
-    weatherHighlights[0]?.weather ??
+  const featuredWeatherRegion =
+    weatherHighlights.find(
+      (region) => region.id === weatherRegionIdForPlace(featuredCrowdPlace),
+    ) ??
+    weatherHighlights[0] ??
     null;
+  const featuredWeather = featuredWeatherRegion?.weather ?? null;
   const featuredPlaceName =
-    featuredCrowdPlace?.name.replace(" 한강공원", "") ?? "한강";
+    featuredCrowdPlace?.name
+      .replace(" 한강공원", "")
+      .replace("해수욕장", "") ?? "여름 장소";
   const featuredCrowdHeadline = crowdHeadline(featuredCrowd);
   const featuredWeatherLabel = weatherHighlightsLoading
-    ? "서울 날씨를 불러오는 중"
+    ? "지역 날씨를 불러오는 중"
     : featuredWeather
-      ? `서울 ${featuredWeather.maxTemperature}° · ${featuredWeather.condition} · 비 ${featuredWeather.precipitationProbability}%`
-      : "서울 날씨와 한강 혼잡도 확인";
+      ? `${featuredWeatherRegion?.name ?? "지역"} ${featuredWeather.maxTemperature}° · ${featuredWeather.condition} · 비 ${featuredWeather.precipitationProbability}%`
+      : "지역 날씨와 예상 혼잡도 확인";
   const featuredFreshnessLabel = featuredCrowd
     ? `${featuredCrowd.observedAt.slice(11, 16)} 기준 · ${
         featuredCrowd.mode === "live" ? "서울 실시간" : "시간대 예상"
@@ -1199,7 +1290,10 @@ function HomePage({
               >
                 <img
                   className="home-shortcut__background"
-                  src="/assets/home-card-places-v2.webp"
+                  src={
+                    featuredCrowdPlace?.imageUrl ??
+                    "/assets/home-card-places-v2.webp"
+                  }
                   alt=""
                   draggable={false}
                 />
@@ -1342,10 +1436,17 @@ function HomePage({
             <span>전체</span>
             <strong>{sessions.length}개</strong>
           </div>
+          {deleteNotice ? (
+            <p className="outing-delete-notice" role="status">
+              {deleteNotice}
+            </p>
+          ) : null}
           <OutingList
             sessions={sessions}
             summaries={outingSummaries}
             onOpenOuting={onOpenOuting}
+            onDeleteOuting={requestDeleteOuting}
+            deletingOutingId={deletingOutingId}
           />
         </section>
       ) : null}
@@ -1388,6 +1489,51 @@ function HomePage({
           <span>내 모임</span>
         </button>
       </nav>
+
+      <Sheet
+        open={deleteTarget != null}
+        onClose={() => {
+          if (deletingOutingId) return;
+          setDeleteTarget(null);
+          setDeleteError("");
+        }}
+        title="모임을 삭제할까요?"
+        description="삭제하면 초대받은 친구도 더 이상 이 모임을 열 수 없어요."
+      >
+        <div className="delete-outing-confirm">
+          <div>
+            <CalendarIcon aria-hidden="true" />
+            <span>
+              <strong>{deleteTarget?.title}</strong>
+              <small>
+                {deleteTarget
+                  ? `${formatDateLabel(deleteTarget.startsAt)} · ${deleteTarget.placeName}`
+                  : ""}
+              </small>
+            </span>
+          </div>
+          <p>준비물, 담당자, 진행 기록이 모두 삭제되며 되돌릴 수 없어요.</p>
+          {deleteError ? <p className="form-error">{deleteError}</p> : null}
+          <div className="delete-outing-confirm__actions">
+            <button
+              type="button"
+              onClick={() => setDeleteTarget(null)}
+              disabled={Boolean(deletingOutingId)}
+            >
+              취소
+            </button>
+            <button
+              className="sheet-danger"
+              type="button"
+              onClick={() => void confirmDeleteOuting()}
+              disabled={Boolean(deletingOutingId)}
+            >
+              <TrashIcon aria-hidden="true" />
+              {deletingOutingId ? "삭제하고 있어요…" : "모임 삭제"}
+            </button>
+          </div>
+        </div>
+      </Sheet>
 
       <Sheet
         open={createOpen}
