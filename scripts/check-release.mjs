@@ -106,6 +106,7 @@ const checks = [
     pass:
       app.includes("<PopularSummerPlaces") &&
       popularSummerPlaces.includes('place.category === "waterpark"') &&
+      popularSummerPlaces.includes("place.imageUrl") &&
       popularSummerPlaces.includes("이 장소로 모임 만들기") &&
       popularSummerPlaces.includes("참고용 예상치"),
   },

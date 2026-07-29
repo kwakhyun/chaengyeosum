@@ -53,6 +53,16 @@ export function PopularSummerPlaces({
                 ) : null}
               </header>
 
+              {place.imageUrl ? (
+                <div className="popular-summer-place-card__image">
+                  <img
+                    src={place.imageUrl}
+                    alt={`${place.name} 물놀이 풍경을 표현한 3D 일러스트`}
+                    loading="lazy"
+                  />
+                </div>
+              ) : null}
+
               <h3>{place.name}</h3>
               <p>{place.tagline}</p>
 

@@ -371,6 +371,7 @@ export function createApiServer({
             tagline: place.tagline,
             highlights: place.highlights,
             summerTip: place.summerTip,
+            imageUrl: place.imageUrl,
             officialUrl: place.officialUrl,
             currentCrowd: estimateCurrentCrowd(place),
           })),

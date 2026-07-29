@@ -68,6 +68,7 @@ export const PLACES = [
     tagline: "파도풀과 스릴 어트랙션을 함께 즐기는 수도권 워터파크",
     highlights: ["대형 파도풀", "스릴 슬라이드", "친구·커플"],
     summerTip: "인기 시설을 먼저 즐기려면 개장 직후 입장을 추천해요.",
+    imageUrl: "/assets/waterpark-caribbean-bay-v1.webp",
     officialUrl:
       "https://reservation.everland.com/web/cb.do?method=productMain",
   },
@@ -82,6 +83,7 @@ export const PLACES = [
     tagline: "서핑마운트와 익스트림리버로 유명한 리조트형 워터파크",
     highlights: ["서핑마운트", "익스트림리버", "리조트 여행"],
     summerTip: "주말에는 오전 입장 후 인기 어트랙션부터 즐겨보세요.",
+    imageUrl: "/assets/waterpark-ocean-world-v1.webp",
     officialUrl: "https://www.sonohotelsresorts.com/complex_vp/guidemap",
   },
   {
@@ -95,6 +97,7 @@ export const PLACES = [
     tagline: "실내·실외 파도풀과 대형 슬라이드를 갖춘 남부권 워터파크",
     highlights: ["자이언트 웨이브", "실내 물놀이", "가족 여행"],
     summerTip: "실내와 실외 운영 시설을 방문 전 공식 안내에서 확인해요.",
+    imageUrl: "/assets/waterpark-gimhae-v1.webp",
     officialUrl: "https://www.lotteworld.com/waterpark/index.asp",
   },
 ];

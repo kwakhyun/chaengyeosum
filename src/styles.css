@@ -928,6 +928,26 @@ button:disabled {
   letter-spacing: -0.055em;
 }
 
+.popular-summer-place-card__image {
+  overflow: hidden;
+  aspect-ratio: 16 / 9;
+  margin: 0 -4px;
+  border-radius: 17px;
+  background: #dceeff;
+}
+
+.popular-summer-place-card__image img {
+  display: block;
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  transition: transform 0.35s ease;
+}
+
+.popular-summer-place-card:active .popular-summer-place-card__image img {
+  transform: scale(1.025);
+}
+
 .popular-summer-place-card > p {
   min-height: 34px;
   margin: 0;
@@ -975,7 +995,7 @@ button:disabled {
   color: #b76e00;
 }
 
-.popular-summer-place-card__crowd--very-busy {
+.popular-summer-place-card__crowd--very_busy {
   background: #ffebee;
   color: #d14343;
 }

@@ -8,6 +8,7 @@ export interface Place {
   tagline?: string;
   highlights?: string[];
   summerTip?: string;
+  imageUrl?: string;
   officialUrl?: string;
   currentCrowd?: CrowdSignal;
 }

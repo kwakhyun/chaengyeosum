@@ -1277,6 +1277,7 @@ async function handleRequest(request, env) {
         tagline: place.tagline,
         highlights: place.highlights,
         summerTip: place.summerTip,
+        imageUrl: place.imageUrl,
         officialUrl: place.officialUrl,
         currentCrowd: estimateCurrentCrowd(place),
       })),

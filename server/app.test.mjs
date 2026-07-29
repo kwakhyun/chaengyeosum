@@ -422,6 +422,7 @@ test("장소 목록에 여름 인기 워터파크와 방문 정보를 제공한�
           place.highlights.length === 3 &&
           place.tagline &&
           place.summerTip &&
+          place.imageUrl.startsWith("/assets/waterpark-") &&
           place.officialUrl.startsWith("https://") &&
           place.currentCrowd.mode === "estimate",
       ),
