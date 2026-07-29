@@ -60,6 +60,17 @@ export function listWeatherHighlights() {
   }>("/weather-highlights");
 }
 
+export function getLocationWeather(latitude: number, longitude: number) {
+  const query = new URLSearchParams({
+    latitude: String(latitude),
+    longitude: String(longitude),
+  });
+  return request<{
+    weather: OutingWeather | null;
+    meta: { generatedAt: number; locationBased: true };
+  }>(`/location-weather?${query}`);
+}
+
 export function searchPlaces(query: string) {
   return request<{ places: Place[] }>(
     `/place-search?q=${encodeURIComponent(query)}`,

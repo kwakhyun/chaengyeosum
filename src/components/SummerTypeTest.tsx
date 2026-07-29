@@ -143,7 +143,7 @@ export function isSummerTypeKey(value: string | null): value is SummerTypeKey {
   );
 }
 
-function getSavedResult(): SummerTypeKey | null {
+export function getSavedSummerType(): SummerTypeKey | null {
   try {
     const saved = window.localStorage.getItem(STORAGE_KEY);
     return isSummerTypeKey(saved) ? saved : null;
@@ -175,16 +175,18 @@ export function SummerTypeTest({
   sharedType,
   onTrack,
   onShare,
+  onResultChange,
 }: {
   sharedType: SummerTypeKey | null;
   onTrack: (name: string, params?: Record<string, string | number>) => void;
   onShare: (result: SummerTypeResult) => Promise<"shared" | "copied">;
+  onResultChange: (result: SummerTypeKey) => void;
 }) {
   const [open, setOpen] = useState(false);
   const [questionIndex, setQuestionIndex] = useState(0);
   const [answers, setAnswers] = useState<SummerTypeKey[]>([]);
   const [resultKey, setResultKey] = useState<SummerTypeKey | null>(
-    getSavedResult,
+    getSavedSummerType,
   );
   const [showResult, setShowResult] = useState(false);
   const [shareState, setShareState] = useState<
@@ -259,6 +261,7 @@ export function SummerTypeTest({
     } catch {
       // 저장 실패가 테스트 완료를 막지 않게 해요.
     }
+    onResultChange(nextResult);
     onTrack("summer_type_completed", { result: nextResult });
   };
 

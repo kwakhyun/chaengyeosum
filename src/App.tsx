@@ -51,6 +51,7 @@ import {
   createOuting,
   deleteItem,
   deleteOuting,
+  getLocationWeather,
   getPlaceIntelligence,
   getPackingRecommendations,
   getOuting,
@@ -71,11 +72,13 @@ import { PlaceIntelligenceCard } from "./components/PlaceIntelligenceCard";
 import { PopularSummerPlaces } from "./components/PopularSummerPlaces";
 import { Sheet } from "./components/Sheet";
 import {
+  getSavedSummerType,
   isSummerTypeKey,
   SummerTypeTest,
   type SummerTypeKey,
   type SummerTypeResult,
 } from "./components/SummerTypeTest";
+import { SummerCrewBuilder } from "./components/SummerCrewBuilder";
 import { WeatherHighlightsCarousel } from "./components/WeatherHighlightsCarousel";
 import {
   getSavedSessions,
@@ -87,9 +90,10 @@ import type {
   ActivityOption,
   AiOutingBriefing,
   CrowdSignal,
-  OutingBundle,
   ItemOption,
+  OutingBundle,
   OutingEvent,
+  OutingWeather,
   PackingItem,
   Participant,
   ParticipantSession,
@@ -438,6 +442,10 @@ function currentOutingId() {
 
 type HomeTab = "home" | "places" | "type" | "outings";
 type CreateStep = 1 | 2 | 3 | 4;
+type UserCoordinates = {
+  latitude: number;
+  longitude: number;
+};
 
 const HOME_PLACE_ORDER = [
   "yeouido-hangang",
@@ -458,6 +466,23 @@ function weatherRegionIdForPlace(place: Place | null) {
   }
   if (location.includes("제주")) return "jeju";
   return "seoul";
+}
+
+function geoDistance(
+  from: UserCoordinates,
+  to: { latitude: number; longitude: number },
+) {
+  const toRadians = (value: number) => (value * Math.PI) / 180;
+  const latitudeDelta = toRadians(to.latitude - from.latitude);
+  const longitudeDelta = toRadians(to.longitude - from.longitude);
+  const fromLatitude = toRadians(from.latitude);
+  const toLatitude = toRadians(to.latitude);
+  const haversine =
+    Math.sin(latitudeDelta / 2) ** 2 +
+    Math.cos(fromLatitude) *
+      Math.cos(toLatitude) *
+      Math.sin(longitudeDelta / 2) ** 2;
+  return 6371 * 2 * Math.atan2(Math.sqrt(haversine), Math.sqrt(1 - haversine));
 }
 
 function getInitialHomeTab(sharedSummerType: SummerTypeKey | null): HomeTab {
@@ -630,6 +655,14 @@ function HomePage({
   );
   const [weatherHighlightsLoading, setWeatherHighlightsLoading] =
     useState(true);
+  const [userLocation, setUserLocation] = useState<UserCoordinates | null>(
+    null,
+  );
+  const [locationStatus, setLocationStatus] = useState<
+    "idle" | "loading" | "granted" | "unavailable"
+  >("idle");
+  const [locationWeather, setLocationWeather] =
+    useState<OutingWeather | null>(null);
   const [itemOptions, setItemOptions] = useState<ItemOption[]>([]);
   const [activities, setActivities] = useState<ActivityOption[]>([]);
   const [smartRecommendations, setSmartRecommendations] = useState<
@@ -678,6 +711,8 @@ function HomePage({
   const sharedSummerType = isSummerTypeKey(sharedSummerTypeValue)
     ? sharedSummerTypeValue
     : null;
+  const [mySummerType, setMySummerType] =
+    useState<SummerTypeKey | null>(getSavedSummerType);
   const [activeTab, setActiveTab] = useState<HomeTab>(() =>
     getInitialHomeTab(sharedSummerType),
   );
@@ -737,6 +772,50 @@ function HomePage({
       cancelled = true;
     };
   }, []);
+
+  useEffect(() => {
+    if (activeTab !== "places" || locationStatus !== "idle") return;
+    if (!navigator.geolocation) {
+      setLocationStatus("unavailable");
+      return;
+    }
+    setLocationStatus("loading");
+    navigator.geolocation.getCurrentPosition(
+      (position) => {
+        setUserLocation({
+          latitude: position.coords.latitude,
+          longitude: position.coords.longitude,
+        });
+        setLocationStatus("granted");
+      },
+      () => {
+        setLocationStatus("unavailable");
+      },
+      {
+        enableHighAccuracy: false,
+        maximumAge: 10 * 60 * 1000,
+        timeout: 6_000,
+      },
+    );
+  }, [activeTab, locationStatus]);
+
+  useEffect(() => {
+    if (!userLocation) {
+      setLocationWeather(null);
+      return;
+    }
+    let cancelled = false;
+    getLocationWeather(userLocation.latitude, userLocation.longitude)
+      .then((result) => {
+        if (!cancelled) setLocationWeather(result.weather);
+      })
+      .catch(() => {
+        if (!cancelled) setLocationWeather(null);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [userLocation]);
 
   useEffect(() => {
     let cancelled = false;
@@ -1229,6 +1308,29 @@ function HomePage({
     : featuredWeather
       ? `${featuredWeatherRegion?.name ?? "지역"} ${featuredWeather.maxTemperature}° · ${featuredWeather.condition} · 비 ${featuredWeather.precipitationProbability}%`
       : "지역 날씨와 예상 혼잡도 확인";
+  const nearestWeatherRegion = useMemo(() => {
+    if (weatherHighlights.length === 0) return null;
+    if (!userLocation) {
+      return (
+        weatherHighlights.find((region) => region.id === "seoul") ??
+        weatherHighlights[0]
+      );
+    }
+    return weatherHighlights.reduce((nearest, region) =>
+      geoDistance(userLocation, region) <
+      geoDistance(userLocation, nearest)
+        ? region
+        : nearest,
+    );
+  }, [userLocation, weatherHighlights]);
+  const placesHeaderWeather =
+    locationWeather ?? nearestWeatherRegion?.weather ?? null;
+  const placesHeaderWeatherLabel =
+    locationStatus === "granted" && locationWeather
+      ? "현재 위치"
+      : locationStatus === "granted" && nearestWeatherRegion
+        ? `${nearestWeatherRegion.name} 근처`
+        : "서울 날씨";
   const featuredFreshnessLabel = featuredCrowd
     ? `${featuredCrowd.observedAt.slice(11, 16)} 기준 · ${
         featuredCrowd.mode === "live" ? "서울 실시간" : "시간대 예상"
@@ -1377,7 +1479,27 @@ function HomePage({
         >
           <header className="home-tab-header">
             <p className="eyebrow">SUMMER MAP</p>
-            <h1 id="places-tab-title">장소와 날씨</h1>
+            <div className="places-tab-title-row">
+              <h1 id="places-tab-title">장소와 날씨</h1>
+              <div
+                className="places-current-weather"
+                aria-label={`${placesHeaderWeatherLabel} ${
+                  placesHeaderWeather
+                    ? `${placesHeaderWeather.maxTemperature}도 ${placesHeaderWeather.condition}`
+                    : "확인 중"
+                }`}
+              >
+                <SunIcon aria-hidden="true" />
+                <span>
+                  <small>{placesHeaderWeatherLabel}</small>
+                  <strong>
+                    {placesHeaderWeather
+                      ? `${placesHeaderWeather.maxTemperature}° · ${placesHeaderWeather.condition}`
+                      : "확인 중"}
+                  </strong>
+                </span>
+              </div>
+            </div>
             <span>어디로 갈지, 언제 출발할지 한눈에 확인해요.</span>
           </header>
           <CrowdHighlightsCarousel
@@ -1387,6 +1509,7 @@ function HomePage({
           <PopularSummerPlaces
             places={places}
             onCreateOuting={startCreateAtPlace}
+            userLocation={userLocation}
           />
           <WeatherHighlightsCarousel
             regions={weatherHighlights}
@@ -1409,6 +1532,12 @@ function HomePage({
             sharedType={sharedSummerType}
             onTrack={track}
             onShare={shareSummerType}
+            onResultChange={setMySummerType}
+          />
+          <SummerCrewBuilder
+            myType={mySummerType}
+            sharedType={sharedSummerType}
+            onTrack={track}
           />
         </section>
       ) : null}

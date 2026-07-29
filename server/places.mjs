@@ -68,6 +68,7 @@ export const PLACES = [
     tagline: "바다 산책과 서핑 체험을 함께 즐기기 좋은 부산 동부 해변",
     highlights: ["완만한 해변", "서핑 체험", "일출·노을"],
     summerTip: "물놀이 구역과 기상 상황을 확인하고 해 질 무렵 산책도 즐겨보세요.",
+    imageUrl: "/assets/summer-place-songjeong-v1.webp",
     officialUrl:
       "https://visitbusan.net/index.do?contentsSid=22&lang_cd=ko&uc_seq=280",
   },
@@ -82,6 +83,7 @@ export const PLACES = [
     tagline: "울창한 숲과 시원한 물길에서 쉬어가는 수도권 계곡 나들이",
     highlights: ["계곡 물놀이", "숲 그늘", "드라이브"],
     summerTip: "비 온 뒤에는 수위와 출입 가능 구간을 공식 안내에서 확인해요.",
+    imageUrl: "/assets/summer-place-baegun-valley-v1.webp",
     officialUrl:
       "https://www.pocheon.go.kr/ktour/viewTursmResrceWeb.do?cpn=62&firstIndex=610&key=9750&lastIndex=620&resrceNo=191&sc1=ktour",
   },
@@ -96,6 +98,7 @@ export const PLACES = [
     tagline: "그늘 산책과 피크닉 뒤 성수동 코스까지 이어지는 도심 숲",
     highlights: ["피크닉", "호수 산책", "성수동 코스"],
     summerTip: "한낮을 피해 늦은 오후에 만나고 대중교통을 이용하면 편해요.",
+    imageUrl: "/assets/summer-place-seoul-forest-v1.webp",
     officialUrl: "https://parks.seoul.go.kr/template/sub/seoulforest.do",
   },
   {

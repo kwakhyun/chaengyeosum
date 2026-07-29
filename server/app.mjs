@@ -40,6 +40,7 @@ import {
 } from "./summer-events.mjs";
 import {
   getForecastWeather,
+  getKoreaDateKey,
   getOutingWeather,
   getRegionalWeatherHighlights,
 } from "./weather.mjs";
@@ -423,6 +424,39 @@ export function createApiServer({
             ...result.meta,
             cached: false,
           },
+        });
+        return;
+      }
+
+      if (request.method === "GET" && path === "/api/location-weather") {
+        const latitude = Number(url.searchParams.get("latitude"));
+        const longitude = Number(url.searchParams.get("longitude"));
+        if (
+          !Number.isFinite(latitude) ||
+          !Number.isFinite(longitude) ||
+          latitude < 32 ||
+          latitude > 39 ||
+          longitude < 124 ||
+          longitude > 132
+        ) {
+          json(response, 400, { error: "위치 정보가 올바르지 않아요." });
+          return;
+        }
+        const date = getKoreaDateKey();
+        const weather = weatherEnabled
+          ? await getForecastWeather(
+              {
+                id: `location-${latitude.toFixed(3)}-${longitude.toFixed(3)}`,
+                startsAt: `${date}T12:00:00+09:00`,
+                latitude,
+                longitude,
+              },
+              fetchImpl,
+            )
+          : null;
+        json(response, 200, {
+          weather,
+          meta: { generatedAt: Date.now(), locationBased: true },
         });
         return;
       }

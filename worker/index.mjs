@@ -1340,6 +1340,30 @@ async function handleRequest(request, env) {
       await getRegionalWeatherHighlights(),
     );
   }
+  if (request.method === "GET" && path === "/api/location-weather") {
+    const latitude = Number(url.searchParams.get("latitude"));
+    const longitude = Number(url.searchParams.get("longitude"));
+    if (
+      !Number.isFinite(latitude) ||
+      !Number.isFinite(longitude) ||
+      latitude < 32 ||
+      latitude > 39 ||
+      longitude < 124 ||
+      longitude > 132
+    ) {
+      return json(request, 400, { error: "위치 정보가 올바르지 않아요." });
+    }
+    const date = getKoreaDateKey();
+    return json(request, 200, {
+      weather: await getForecastWeather({
+        id: `location-${latitude.toFixed(3)}-${longitude.toFixed(3)}`,
+        startsAt: `${date}T12:00:00+09:00`,
+        latitude,
+        longitude,
+      }),
+      meta: { generatedAt: Date.now(), locationBased: true },
+    });
+  }
   if (request.method === "GET" && path === "/api/place-search") {
     return json(request, 200, {
       places: await searchPlaces(url.searchParams.get("q")),

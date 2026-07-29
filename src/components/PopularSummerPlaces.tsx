@@ -1,7 +1,9 @@
+import { useMemo, useState } from "react";
 import {
   ChevronRightIcon,
+  GlobeIcon,
   LightningBoltIcon,
-  SunIcon,
+  ShuffleIcon,
 } from "@radix-ui/react-icons";
 
 import type { Place } from "../types";
@@ -17,18 +19,71 @@ const CATEGORY_META: Record<
   park: { label: "도심 숲", emoji: "🌳" },
 };
 
+type Coordinates = {
+  latitude: number;
+  longitude: number;
+};
+
+function distanceInKilometers(from: Coordinates, to: Coordinates) {
+  const toRadians = (value: number) => (value * Math.PI) / 180;
+  const latitudeDelta = toRadians(to.latitude - from.latitude);
+  const longitudeDelta = toRadians(to.longitude - from.longitude);
+  const fromLatitude = toRadians(from.latitude);
+  const toLatitude = toRadians(to.latitude);
+  const haversine =
+    Math.sin(latitudeDelta / 2) ** 2 +
+    Math.cos(fromLatitude) *
+      Math.cos(toLatitude) *
+      Math.sin(longitudeDelta / 2) ** 2;
+  return 6371 * 2 * Math.atan2(Math.sqrt(haversine), Math.sqrt(1 - haversine));
+}
+
+function randomRank(id: string, seed: number) {
+  let value = seed ^ 0x9e3779b9;
+  for (let index = 0; index < id.length; index += 1) {
+    value = Math.imul(value ^ id.charCodeAt(index), 2654435761);
+  }
+  return (value >>> 0) / 4294967295;
+}
+
+function formatDistance(distance: number) {
+  if (distance < 1) return `${Math.max(100, Math.round(distance * 10) * 100)}m`;
+  if (distance < 10) return `${distance.toFixed(1)}km`;
+  return `${Math.round(distance)}km`;
+}
+
 export function PopularSummerPlaces({
   places,
   onCreateOuting,
+  userLocation,
 }: {
   places: Place[];
   onCreateOuting: (place: Place) => void;
+  userLocation: Coordinates | null;
 }) {
+  const [randomSeed] = useState(() =>
+    Math.floor(Math.random() * 0x7fffffff),
+  );
   const summerPlaces = places.filter(
     (place) =>
       place.category !== "hangang" &&
       Boolean(place.tagline && place.summerTip && place.highlights?.length),
   );
+  const recommendedPlaces = useMemo(() => {
+    return summerPlaces
+      .map((place) => ({
+        place,
+        distance: userLocation
+          ? distanceInKilometers(userLocation, place)
+          : null,
+        random: randomRank(place.id, randomSeed),
+      }))
+      .sort((left, right) =>
+        userLocation
+          ? (left.distance ?? 0) - (right.distance ?? 0)
+          : left.random - right.random,
+      );
+  }, [places, randomSeed, userLocation]);
   if (summerPlaces.length === 0) return null;
 
   return (
@@ -42,13 +97,17 @@ export function PopularSummerPlaces({
           <h2 id="popular-summer-places-title">여름 모임, 어디서 할까?</h2>
         </div>
         <span>
-          <SunIcon aria-hidden="true" />
-          모임 추천
+          {userLocation ? (
+            <GlobeIcon aria-hidden="true" />
+          ) : (
+            <ShuffleIcon aria-hidden="true" />
+          )}
+          {userLocation ? "가까운 순" : "랜덤 추천"}
         </span>
       </div>
 
       <div className="popular-summer-places__track">
-        {summerPlaces.map((place) => {
+        {recommendedPlaces.map(({ place, distance }) => {
           const crowd = place.currentCrowd;
           const category = CATEGORY_META[place.category ?? "park"];
           return (
@@ -56,7 +115,12 @@ export function PopularSummerPlaces({
               <header>
                 <div>
                   <span>{category.label}</span>
-                  <small>{place.city}</small>
+                  <small>
+                    {place.city}
+                    {distance == null
+                      ? ""
+                      : ` · 내 위치 ${formatDistance(distance)}`}
+                  </small>
                 </div>
                 {crowd ? (
                   <strong

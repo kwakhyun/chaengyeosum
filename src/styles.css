@@ -496,6 +496,50 @@ button:disabled {
   letter-spacing: -0.06em;
 }
 
+.places-tab-title-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+}
+
+.places-current-weather {
+  display: flex;
+  flex: 0 0 auto;
+  align-items: center;
+  gap: 7px;
+  padding: 7px 10px;
+  border: 1px solid rgb(49 130 246 / 12%);
+  border-radius: 14px;
+  background: rgb(255 255 255 / 82%);
+  box-shadow: 0 7px 18px rgb(49 91 135 / 9%);
+  backdrop-filter: blur(9px);
+}
+
+.places-current-weather > svg {
+  width: 17px;
+  height: 17px;
+  color: #ff9f43;
+}
+
+.places-current-weather > span {
+  display: grid;
+  gap: 1px;
+}
+
+.places-current-weather small {
+  color: #8b95a1;
+  font-size: 8px;
+  font-weight: 800;
+}
+
+.places-current-weather strong {
+  color: #333d4b;
+  font-size: 11px;
+  font-weight: 850;
+  white-space: nowrap;
+}
+
 .home-tab-header > span,
 .home-tab-header > div > span {
   display: block;
@@ -505,6 +549,15 @@ button:disabled {
   font-weight: 650;
   line-height: 1.5;
   letter-spacing: -0.025em;
+}
+
+.home-tab-header .places-current-weather > span {
+  display: grid;
+  gap: 1px;
+  margin: 0;
+  color: inherit;
+  line-height: normal;
+  letter-spacing: normal;
 }
 
 .home-tab-header--with-action {
@@ -533,7 +586,7 @@ button:disabled {
 }
 
 .home-tab-page--type .summer-type-entry {
-  margin-bottom: 0;
+  margin-bottom: 38px;
 }
 
 .outing-tab-count {
@@ -865,7 +918,7 @@ button:disabled {
 .popular-summer-places__track {
   display: grid;
   overflow-x: auto;
-  grid-auto-columns: min(84vw, 340px);
+  grid-auto-columns: min(74vw, 286px);
   grid-auto-flow: column;
   gap: 11px;
   margin: 0 -18px;
@@ -880,10 +933,10 @@ button:disabled {
 
 .popular-summer-place-card {
   display: grid;
-  gap: 11px;
-  padding: 17px;
+  gap: 8px;
+  padding: 13px;
   border: 1px solid #dce9f5;
-  border-radius: 24px;
+  border-radius: 20px;
   background:
     radial-gradient(circle at 100% 0, rgb(49 130 246 / 13%), transparent 42%),
     #fff;
@@ -921,9 +974,9 @@ button:disabled {
 }
 
 .popular-summer-place-card > h3 {
-  margin: 2px 0 -5px;
+  margin: 1px 0 -3px;
   color: #191f28;
-  font-size: 24px;
+  font-size: 20px;
   font-weight: 900;
   letter-spacing: -0.055em;
 }
@@ -932,9 +985,9 @@ button:disabled {
   display: grid;
   overflow: hidden;
   aspect-ratio: 16 / 9;
-  margin: 0 -4px;
+  margin: 0 -2px;
   place-items: center;
-  border-radius: 17px;
+  border-radius: 15px;
   background: #dceeff;
 }
 
@@ -977,10 +1030,10 @@ button:disabled {
 }
 
 .popular-summer-place-card > p {
-  min-height: 34px;
+  min-height: 31px;
   margin: 0;
   color: #4e5968;
-  font-size: 12px;
+  font-size: 11px;
   font-weight: 700;
   line-height: 1.45;
 }
@@ -992,7 +1045,7 @@ button:disabled {
 }
 
 .popular-summer-place-card__highlights span {
-  padding: 6px 8px;
+  padding: 5px 7px;
   border-radius: 9px;
   background: #f2f6f9;
   color: #4e5968;
@@ -1031,9 +1084,9 @@ button:disabled {
 .popular-summer-place-card__tip {
   display: flex;
   align-items: flex-start;
-  gap: 8px;
-  padding: 11px 12px;
-  border-radius: 14px;
+  gap: 7px;
+  padding: 9px 10px;
+  border-radius: 12px;
   background: #fff8e8;
   color: #8f5b00;
 }
@@ -1061,12 +1114,12 @@ button:disabled {
 
 .popular-summer-place-card > button {
   display: flex;
-  min-height: 42px;
+  min-height: 44px;
   align-items: center;
   justify-content: center;
   gap: 4px;
   border: 0;
-  border-radius: 14px;
+  border-radius: 13px;
   background: #3182f6;
   color: #fff;
   font-size: 12px;
@@ -1406,6 +1459,580 @@ button:disabled {
   right: 21px;
   width: 104px;
   grid-template-columns: repeat(2, 48px);
+}
+
+.summer-crew-builder {
+  display: grid;
+  gap: 14px;
+  margin-bottom: 34px;
+}
+
+.summer-crew-builder > header {
+  display: flex;
+  align-items: end;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 0 5px;
+}
+
+.summer-crew-builder > header .eyebrow {
+  margin: 0 0 5px;
+  color: #7567f8;
+  font-size: 9px;
+  font-weight: 950;
+  letter-spacing: 0.12em;
+}
+
+.summer-crew-builder > header h2 {
+  margin: 0;
+  color: #191f28;
+  font-size: 22px;
+  font-weight: 900;
+  letter-spacing: -0.055em;
+}
+
+.summer-crew-builder > header span {
+  display: block;
+  margin-top: 5px;
+  color: #6b7684;
+  font-size: 11px;
+  font-weight: 650;
+  line-height: 1.45;
+}
+
+.summer-crew-builder > header button {
+  display: inline-flex;
+  min-height: 38px;
+  flex: 0 0 auto;
+  align-items: center;
+  gap: 5px;
+  padding: 0 11px;
+  border: 1px solid #ddd8ff;
+  border-radius: 13px;
+  background: #f1efff;
+  color: #6250d8;
+  font-size: 11px;
+  font-weight: 850;
+}
+
+.summer-crew-builder > header button svg {
+  width: 14px;
+  height: 14px;
+}
+
+.summer-friend-received {
+  display: grid;
+  min-height: 66px;
+  grid-template-columns: 50px minmax(0, 1fr) 24px;
+  align-items: center;
+  gap: 10px;
+  padding: 8px 11px 8px 8px;
+  border: 1px solid #ddd8ff;
+  border-radius: 18px;
+  background: linear-gradient(135deg, #f4efff, #e8f3ff);
+  color: #333d4b;
+  text-align: left;
+}
+
+.summer-friend-received > img {
+  width: 50px;
+  height: 50px;
+  border-radius: 14px;
+  object-fit: cover;
+}
+
+.summer-friend-received > span {
+  display: grid;
+  gap: 3px;
+}
+
+.summer-friend-received small {
+  color: #7567f8;
+  font-size: 9px;
+  font-weight: 850;
+}
+
+.summer-friend-received strong {
+  color: #333d4b;
+  font-size: 12px;
+  font-weight: 900;
+}
+
+.summer-friend-received > svg {
+  color: #7567f8;
+}
+
+.summer-crew-members {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 8px;
+}
+
+.summer-crew-member {
+  --crew-accent: #3182f6;
+  --crew-soft: #e8f3ff;
+  position: relative;
+  min-width: 0;
+  overflow: hidden;
+  border: 1px solid #e3e9f0;
+  border-radius: 18px;
+  background: #fff;
+  color: #333d4b;
+  transition:
+    border-color 160ms ease,
+    background 160ms ease,
+    transform 160ms ease;
+}
+
+.summer-crew-member--guardian {
+  --crew-accent: #d88100;
+  --crew-soft: #fff4d6;
+}
+
+.summer-crew-member--vibe {
+  --crew-accent: #d94e89;
+  --crew-soft: #ffeaf2;
+}
+
+.summer-crew-member--adventurer {
+  --crew-accent: #0f9473;
+  --crew-soft: #e2f8f0;
+}
+
+.summer-crew-member.is-selected {
+  border-color: color-mix(in srgb, var(--crew-accent) 48%, white);
+  background: var(--crew-soft);
+  box-shadow: 0 8px 18px
+    color-mix(in srgb, var(--crew-accent) 11%, transparent);
+}
+
+.summer-crew-member:active {
+  transform: scale(0.98);
+}
+
+.summer-crew-member > button:first-child {
+  display: grid;
+  width: 100%;
+  min-height: 68px;
+  grid-template-columns: 52px minmax(0, 1fr);
+  align-items: center;
+  gap: 9px;
+  padding: 7px 25px 7px 7px;
+  border: 0;
+  background: transparent;
+  color: inherit;
+  text-align: left;
+}
+
+.summer-crew-member > button:first-child > img {
+  display: block;
+  width: 52px;
+  height: 52px;
+  border-radius: 14px;
+  object-fit: cover;
+}
+
+.summer-crew-member > button:first-child > span {
+  display: grid;
+  min-width: 0;
+  gap: 2px;
+}
+
+.summer-crew-member strong {
+  overflow: hidden;
+  color: #333d4b;
+  font-size: 12px;
+  font-weight: 900;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.summer-crew-member small {
+  overflow: hidden;
+  color: #8b95a1;
+  font-size: 9px;
+  font-weight: 700;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.summer-crew-member > button:first-child > svg {
+  position: absolute;
+  top: 6px;
+  right: 6px;
+  width: 15px;
+  height: 15px;
+  padding: 3px;
+  border-radius: 999px;
+  background: var(--crew-accent);
+  color: #fff;
+  box-sizing: content-box;
+}
+
+.summer-crew-member__remove {
+  position: absolute;
+  right: 4px;
+  bottom: 4px;
+  display: grid;
+  width: 26px;
+  height: 26px;
+  padding: 0;
+  place-items: center;
+  border: 0;
+  border-radius: 9px;
+  background: rgb(255 255 255 / 70%);
+  color: #b0b8c1;
+}
+
+.summer-crew-member__remove svg {
+  width: 13px;
+  height: 13px;
+}
+
+.summer-crew-member--add {
+  display: grid;
+  min-height: 68px;
+  grid-template-columns: 40px minmax(0, 1fr);
+  align-items: center;
+  gap: 9px;
+  padding: 8px 10px;
+  border-style: dashed;
+  background: rgb(255 255 255 / 54%);
+  text-align: left;
+}
+
+.summer-crew-member--add > svg {
+  width: 18px;
+  height: 18px;
+  padding: 10px;
+  border-radius: 13px;
+  background: #f1efff;
+  color: #7567f8;
+  box-sizing: content-box;
+}
+
+.summer-crew-member--add > span {
+  display: grid;
+  min-width: 0;
+  gap: 2px;
+}
+
+.summer-crew-empty,
+.summer-crew-waiting {
+  display: grid;
+  justify-items: center;
+  padding: 22px 18px;
+  border: 1px dashed #d8dce8;
+  border-radius: 20px;
+  background: rgb(255 255 255 / 58%);
+  text-align: center;
+}
+
+.summer-crew-empty > svg {
+  width: 22px;
+  height: 22px;
+  padding: 10px;
+  border-radius: 15px;
+  background: #f1efff;
+  color: #7567f8;
+  box-sizing: content-box;
+}
+
+.summer-crew-empty strong,
+.summer-crew-waiting strong {
+  margin-top: 10px;
+  color: #333d4b;
+  font-size: 13px;
+  font-weight: 900;
+}
+
+.summer-crew-empty span {
+  max-width: 250px;
+  margin-top: 5px;
+  color: #8b95a1;
+  font-size: 10px;
+  font-weight: 650;
+  line-height: 1.5;
+}
+
+.summer-crew-waiting > span {
+  padding: 5px 9px;
+  border-radius: 999px;
+  background: #f1efff;
+  color: #6250d8;
+  font-size: 9px;
+  font-weight: 900;
+}
+
+.summer-crew-waiting button {
+  min-height: 40px;
+  margin-top: 12px;
+  padding: 0 14px;
+  border: 0;
+  border-radius: 13px;
+  background: #6250d8;
+  color: #fff;
+  font-size: 11px;
+  font-weight: 850;
+}
+
+.summer-crew-result {
+  position: relative;
+  overflow: hidden;
+  padding: 17px;
+  border: 1px solid rgb(117 103 248 / 15%);
+  border-radius: 24px;
+  background:
+    radial-gradient(circle at 94% 5%, rgb(139 217 255 / 75%), transparent 33%),
+    radial-gradient(circle at 10% 100%, rgb(255 212 226 / 82%), transparent 37%),
+    linear-gradient(145deg, #f1efff, #e9f6ff 58%, #fff);
+  box-shadow: 0 15px 32px rgb(68 82 150 / 13%);
+}
+
+.summer-crew-result__visual {
+  display: flex;
+  min-height: 70px;
+  align-items: center;
+  padding-right: 102px;
+}
+
+.summer-crew-result__visual img {
+  width: 64px;
+  height: 64px;
+  margin-right: -17px;
+  border: 3px solid rgb(255 255 255 / 92%);
+  border-radius: 20px;
+  object-fit: cover;
+  box-shadow: 0 8px 18px rgb(45 60 113 / 16%);
+}
+
+.summer-crew-result__visual img:nth-child(even) {
+  transform: translateY(6px) rotate(3deg);
+}
+
+.summer-crew-result__visual img:nth-child(odd) {
+  transform: translateY(-2px) rotate(-3deg);
+}
+
+.summer-crew-result__score {
+  position: absolute;
+  top: 17px;
+  right: 17px;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 8px 10px;
+  border: 1px solid rgb(255 255 255 / 74%);
+  border-radius: 14px;
+  background: rgb(255 255 255 / 80%);
+  color: #7567f8;
+  box-shadow: 0 7px 18px rgb(83 70 170 / 10%);
+  backdrop-filter: blur(8px);
+}
+
+.summer-crew-result__score > svg {
+  width: 15px;
+  height: 15px;
+  color: #ffb020;
+}
+
+.summer-crew-result__score > span {
+  display: grid;
+  gap: 1px;
+}
+
+.summer-crew-result__score small {
+  color: #8b95a1;
+  font-size: 8px;
+  font-weight: 800;
+}
+
+.summer-crew-result__score strong {
+  color: #6250d8;
+  font-size: 14px;
+  font-weight: 950;
+}
+
+.summer-crew-result > p {
+  margin: 15px 0 4px;
+  color: #7567f8;
+  font-size: 10px;
+  font-weight: 900;
+}
+
+.summer-crew-result > h3 {
+  margin: 0;
+  color: #191f28;
+  font-size: 25px;
+  font-weight: 950;
+  letter-spacing: -0.06em;
+}
+
+.summer-crew-result > h3 + span {
+  display: block;
+  margin-top: 7px;
+  color: #4e5968;
+  font-size: 12px;
+  font-weight: 700;
+  line-height: 1.5;
+}
+
+.summer-crew-result dl {
+  display: grid;
+  gap: 1px;
+  overflow: hidden;
+  margin: 15px 0 0;
+  border: 1px solid rgb(117 103 248 / 10%);
+  border-radius: 15px;
+  background: rgb(255 255 255 / 72%);
+}
+
+.summer-crew-result dl > div {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  min-height: 42px;
+  padding: 0 12px;
+  background: rgb(255 255 255 / 72%);
+}
+
+.summer-crew-result dt {
+  color: #8b95a1;
+  font-size: 9px;
+  font-weight: 750;
+}
+
+.summer-crew-result dd {
+  margin: 0;
+  color: #333d4b;
+  font-size: 11px;
+  font-weight: 900;
+  text-align: right;
+}
+
+.summer-crew-result__tip {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+  margin-top: 10px;
+  padding: 10px 11px;
+  border-radius: 14px;
+  background: rgb(255 255 255 / 68%);
+  color: #6250d8;
+}
+
+.summer-crew-result__tip > svg {
+  flex: 0 0 auto;
+  margin-top: 2px;
+}
+
+.summer-crew-result__tip > span {
+  display: grid;
+  gap: 2px;
+}
+
+.summer-crew-result__tip small {
+  color: #8b95a1;
+  font-size: 8px;
+  font-weight: 800;
+}
+
+.summer-crew-result__tip strong {
+  color: #4e5968;
+  font-size: 10px;
+  font-weight: 850;
+  line-height: 1.4;
+}
+
+.summer-crew-share {
+  display: flex;
+  width: 100%;
+  min-height: 48px;
+  align-items: center;
+  justify-content: center;
+  gap: 7px;
+  margin-top: 12px;
+  border: 0;
+  border-radius: 15px;
+  background: #6250d8;
+  color: #fff;
+  font-size: 13px;
+  font-weight: 900;
+  box-shadow: 0 10px 20px rgb(98 80 216 / 20%);
+}
+
+.summer-crew-share:disabled {
+  opacity: 0.58;
+}
+
+.summer-friend-form {
+  display: grid;
+  gap: 15px;
+}
+
+.summer-friend-form__received {
+  display: grid;
+  grid-template-columns: 58px minmax(0, 1fr);
+  align-items: center;
+  gap: 11px;
+  padding: 9px;
+  border-radius: 18px;
+  background: linear-gradient(135deg, #f4efff, #e8f3ff);
+}
+
+.summer-friend-form__received img {
+  width: 58px;
+  height: 58px;
+  border-radius: 16px;
+  object-fit: cover;
+}
+
+.summer-friend-form__received span {
+  display: grid;
+  gap: 3px;
+}
+
+.summer-friend-form__received small {
+  color: #7567f8;
+  font-size: 9px;
+  font-weight: 850;
+}
+
+.summer-friend-form__received strong {
+  color: #333d4b;
+  font-size: 14px;
+  font-weight: 900;
+}
+
+.summer-friend-form > label {
+  display: grid;
+  gap: 7px;
+}
+
+.summer-friend-form > label > span {
+  color: #333d4b;
+  font-size: 12px;
+  font-weight: 850;
+}
+
+.summer-friend-form input {
+  width: 100%;
+  height: 52px;
+  padding: 0 14px;
+  border: 1px solid #dce3ea;
+  border-radius: 15px;
+  outline: none;
+  background: #f8fafc;
+  color: #191f28;
+  font: inherit;
+  font-size: 14px;
+}
+
+.summer-friend-form input:focus {
+  border-color: #3182f6;
+  background: #fff;
+  box-shadow: 0 0 0 3px rgb(49 130 246 / 10%);
 }
 
 .summer-type-character {

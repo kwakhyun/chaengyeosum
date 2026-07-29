@@ -99,14 +99,16 @@
 ## 자동·실행 검증 결과
 
 - TypeScript: 통과
-- API 테스트: 12/12 통과
-- Cloudflare Worker 스모크: 통과
+- API 테스트: 15/15 통과
+- Cloudflare Worker 스모크: 운영 환경 통과
+- 장소 인텔리전스·여름 행사 추천·위치 날씨 운영 API: 통과
+- OpenAI 브리핑 생성 및 동일 상태 캐시: 통과
 - Cloudflare Worker 배포 드라이런: 통과 (정적 로고 2개와 D1·Durable Object 바인딩 확인)
 - Web 프로덕션 빌드: 통과
 - AIT 빌드: 통과
-- 정적 출시 검사: `npm run check:release`
+- 정적 출시 검사: 18/18 통과
 - 앱인토스 SDK: 최신 안정판 `@apps-in-toss/web-framework@2.10.8`
-- AIT 크기: 약 8.4MB로 100MB 제한 이하
+- AIT 크기: 약 9.1MB로 100MB 제한 이하
 - 공개 브랜드 로고 URL: HTTP 200
 
 ### 의존성 보안 감사 참고
