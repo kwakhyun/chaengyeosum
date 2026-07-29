@@ -58,7 +58,12 @@ const checks = [
     pass:
       /\.home-bottom-nav\s*\{[\s\S]*?bottom:\s*0;[\s\S]*?left:\s*0;/.test(
         styles,
-      ) && styles.includes("border-radius: 20px 20px 0 0"),
+      ) &&
+      styles.includes("height: 66px") &&
+      styles.includes("padding: 6px 12px 8px") &&
+      !styles.includes(
+        "padding: 6px 12px max(8px, env(safe-area-inset-bottom))",
+      ),
   },
   {
     name: "앱인토스 네이티브 뒤로가기 처리",
@@ -66,6 +71,14 @@ const checks = [
       app.includes('graniteEvent.addEventListener("backEvent"') &&
       app.includes("new Event(APP_BACK_EVENT") &&
       app.includes("closeView()"),
+  },
+  {
+    name: "공유 링크 전용 이미지와 문구 연결",
+    pass:
+      app.includes("SHARE_OG_IMAGE_URL") &&
+      app.match(/getTossShareLink\([\s\S]*?SHARE_OG_IMAGE_URL/g)?.length ===
+        3 &&
+      app.includes("같이 챙길래?"),
   },
   {
     name: "앱 내 기능 진입점 제공",

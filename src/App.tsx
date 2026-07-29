@@ -100,6 +100,8 @@ import "./styles.css";
 
 const APP_NAME = "chaengyeosum";
 const APP_BACK_EVENT = "chaengyeosum:back";
+const SHARE_OG_IMAGE_URL =
+  "https://chaengyeosum-mobile.khyun97.chatgpt.site/og.png";
 
 function getBriefingSnapshot(bundle: OutingBundle) {
   return JSON.stringify({
@@ -1063,15 +1065,18 @@ function HomePage({
     const deepLink = `intoss://${APP_NAME}?summerType=${result.key}`;
     const webLink = `${window.location.origin}/?summerType=${result.key}`;
     const message = [
-      `나는 여름 모임에서 ‘${result.name}’!`,
-      `시그니처 준비물은 ${result.signatureItem}.`,
-      "너는 어떤 타입인지 30초 만에 확인해봐.",
+      `🌞 내 여름 준비 캐릭터는 ‘${result.name}’`,
+      `시그니처 준비물은 ${result.signatureItem}!`,
+      "너는 어떤 유형인지 30초 만에 확인해봐 👇",
     ].join("\n");
     let shareResult: "shared" | "copied" = "copied";
 
     try {
       if (hasTossBridge()) {
-        const tossLink = await getTossShareLink(deepLink);
+        const tossLink = await getTossShareLink(
+          deepLink,
+          SHARE_OG_IMAGE_URL,
+        );
         await share({ message: `${message}\n\n${tossLink}` });
         shareResult = "shared";
       } else if (window.navigator.share) {
@@ -2289,14 +2294,19 @@ function OutingPage({
     const deepLink = `intoss://${APP_NAME}/outing/${bundle.outing.id}?invite=${encodeURIComponent(bundle.outing.inviteCode)}`;
     const webLink = `${window.location.origin}/outing/${bundle.outing.id}?invite=${encodeURIComponent(bundle.outing.inviteCode)}`;
     const message = [
-      aiBriefing.shareCaption,
+      `☀️ ${bundle.outing.title} AI 준비 브리핑`,
       `“${aiBriefing.headline}”`,
+      aiBriefing.shareCaption,
+      "같이 확인하고 하나씩 맡아줘 👇",
       "",
     ].join("\n");
     let resultMessage = "AI 브리핑을 복사했어요";
     try {
       if (hasTossBridge()) {
-        const tossLink = await getTossShareLink(deepLink);
+        const tossLink = await getTossShareLink(
+          deepLink,
+          SHARE_OG_IMAGE_URL,
+        );
         await share({ message: `${message}${tossLink}` });
         resultMessage = "AI 브리핑을 공유했어요";
       } else if (window.navigator.share) {
@@ -2333,15 +2343,19 @@ function OutingPage({
             .join(" · ")} 중 하나 맡아줄래?`
         : "준비 상황 같이 확인해줘!";
     const message = [
-      `${dayLabel ? `${dayLabel} ` : ""}${bundle.outing.title}`,
-      `${readyCount}/${bundle.items.length}개 준비 완료 · ${unassigned.length}개 주인 찾는 중`,
+      `🏖️ ${bundle.outing.title}, 같이 챙길래?`,
+      `${dayLabel ? `${dayLabel} · ` : ""}준비 ${readyCount}/${bundle.items.length}`,
       ask,
+      "하나 맡고 준비 완료까지 같이 가요 👇",
       "",
     ].join("\n");
     let resultMessage = "초대 링크를 복사했어요";
     try {
       if (hasTossBridge()) {
-        const tossLink = await getTossShareLink(deepLink);
+        const tossLink = await getTossShareLink(
+          deepLink,
+          SHARE_OG_IMAGE_URL,
+        );
         await share({ message: `${message}${tossLink}` });
         resultMessage = "초대 링크를 공유했어요";
       } else {

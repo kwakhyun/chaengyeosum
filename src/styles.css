@@ -45,7 +45,7 @@ button:disabled {
 }
 
 .home-app {
-  padding-bottom: calc(84px + env(safe-area-inset-bottom));
+  padding-bottom: 84px;
 }
 
 .hero,
@@ -552,9 +552,9 @@ button:disabled {
   left: 0;
   z-index: 900;
   display: grid;
-  min-height: 64px;
+  height: 66px;
   grid-template-columns: repeat(4, minmax(0, 1fr));
-  padding: 6px 12px max(8px, env(safe-area-inset-bottom));
+  padding: 6px 12px 8px;
   border: 1px solid rgb(215 224 234 / 82%);
   border-width: 1px 0 0;
   border-radius: 20px 20px 0 0;

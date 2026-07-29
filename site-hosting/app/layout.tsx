@@ -30,10 +30,10 @@ export async function generateMetadata(): Promise<Metadata> {
       locale: "ko_KR",
       images: [
         {
-          url: "/og-live.png",
-          width: 1774,
-          height: 887,
-          alt: "챙겨썸 — 지금 한강, 자리 있을까?",
+          url: "/og.png",
+          width: 1200,
+          height: 630,
+          alt: "챙겨썸 — 같이 챙기면 여름이 가벼워져요",
         },
       ],
     },
@@ -41,7 +41,7 @@ export async function generateMetadata(): Promise<Metadata> {
       card: "summary_large_image",
       title,
       description,
-      images: ["/og-live.png"],
+      images: ["/og.png"],
     },
   };
 }
