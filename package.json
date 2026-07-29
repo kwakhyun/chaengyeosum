@@ -1,7 +1,7 @@
 {
   "name": "chaengyeosum-ait",
   "private": true,
-  "version": "0.1.0",
+  "version": "0.1.1",
   "type": "module",
   "scripts": {
     "dev": "node server/dev.mjs",
@@ -11,6 +11,7 @@
     "typecheck": "tsc --noEmit",
     "test:api": "node --test server/*.test.mjs",
     "test:worker": "node worker/smoke.mjs",
+    "check:release": "node scripts/check-release.mjs",
     "test:ai-live": "node worker/ai-smoke.mjs",
     "test:intel-live": "node worker/intel-smoke.mjs",
     "db:migrate:local": "wrangler d1 migrations apply chaengyeosum-prod --local",
@@ -20,7 +21,7 @@
     "build": "ait build"
   },
   "dependencies": {
-    "@apps-in-toss/web-framework": "2.10.7",
+    "@apps-in-toss/web-framework": "2.10.8",
     "@radix-ui/react-icons": "1.3.2",
     "react": "19.2.7",
     "react-dom": "19.2.7"

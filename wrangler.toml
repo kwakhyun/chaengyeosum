@@ -4,7 +4,7 @@ compatibility_date = "2026-07-28"
 workers_dev = true
 
 [assets]
-directory = "./submission-assets/final"
+directory = "./worker-assets"
 
 [observability]
 enabled = true

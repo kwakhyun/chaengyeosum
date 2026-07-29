@@ -1,0 +1,67 @@
+{
+  "generatedAt": "2026-07-29T03:49:48.095Z",
+  "appName": "챙겨썸",
+  "appId": "chaengyeosum",
+  "files": [
+    {
+      "filename": "app-logo-light-600x600.png",
+      "kind": "app-logo-light",
+      "width": 600,
+      "height": 600,
+      "format": "png",
+      "hasAlpha": false,
+      "source": "source/logo-light-generated.png",
+      "sha256": "d0654398d2cdbb5ec70053e85af6269f39fbaaba757bf9ddf639ac787007c437"
+    },
+    {
+      "filename": "app-logo-dark-600x600.png",
+      "kind": "app-logo-dark",
+      "width": 600,
+      "height": 600,
+      "format": "png",
+      "hasAlpha": false,
+      "source": "../final/logo-dark-600x600.png",
+      "sha256": "f22e6173a16c52c5999b8b5d61260b4c990891f79151ccb432a5129ba1895879"
+    },
+    {
+      "filename": "screenshot-01-home-636x1048.png",
+      "kind": "screenshot-vertical",
+      "width": 636,
+      "height": 1048,
+      "format": "png",
+      "hasAlpha": false,
+      "source": "source/01-home-480x791.png",
+      "sha256": "88df3fa5eef70a0d1001a03fd45953c721512826d3a9dab2cd61d0233fb0652c"
+    },
+    {
+      "filename": "screenshot-02-places-weather-636x1048.png",
+      "kind": "screenshot-vertical",
+      "width": 636,
+      "height": 1048,
+      "format": "png",
+      "hasAlpha": false,
+      "source": "source/02-places-480x791.png",
+      "sha256": "821776a18164a038629d74e4dc439392919f7b0846e585ceae7ecd4213041556"
+    },
+    {
+      "filename": "screenshot-03-personality-result-636x1048.png",
+      "kind": "screenshot-vertical",
+      "width": 636,
+      "height": 1048,
+      "format": "png",
+      "hasAlpha": false,
+      "source": "source/03-personality-result-480x791.png",
+      "sha256": "e33940b458fdb3f3b6c8e479c1c360a411b375aa36b54fd1f1492a6cc4613f95"
+    },
+    {
+      "filename": "screenshot-04-create-outing-636x1048.png",
+      "kind": "screenshot-vertical",
+      "width": 636,
+      "height": 1048,
+      "format": "png",
+      "hasAlpha": false,
+      "source": "source/04-create-step-480x791.png",
+      "sha256": "26d51e0297179d2ddd61a130e59dbd341be1216835c5ffc55463a8a6d74421c2"
+    }
+  ]
+}

@@ -38,7 +38,9 @@ import {
 } from "@radix-ui/react-icons";
 import {
   Analytics,
+  closeView,
   getTossShareLink,
+  graniteEvent,
   share,
 } from "@apps-in-toss/web-framework";
 
@@ -69,6 +71,7 @@ import { Sheet } from "./components/Sheet";
 import {
   isSummerTypeKey,
   SummerTypeTest,
+  type SummerTypeKey,
   type SummerTypeResult,
 } from "./components/SummerTypeTest";
 import { WeatherHighlightsCarousel } from "./components/WeatherHighlightsCarousel";
@@ -96,6 +99,7 @@ import type {
 import "./styles.css";
 
 const APP_NAME = "chaengyeosum";
+const APP_BACK_EVENT = "chaengyeosum:back";
 
 function getBriefingSnapshot(bundle: OutingBundle) {
   return JSON.stringify({
@@ -171,6 +175,14 @@ function formatDateLabel(startsAt: string) {
   const relative =
     dayDiff === 0 ? "오늘" : dayDiff === 1 ? "내일" : dayDiff > 1 ? `D-${dayDiff}` : "지난 모임";
   return `${relative} · ${eventDate.getMonth() + 1}월 ${eventDate.getDate()}일`;
+}
+
+function crowdHeadline(crowd: CrowdSignal | null) {
+  if (!crowd) return "혼잡도를 확인해요";
+  if (crowd.level === "relaxed") return "여유로워요";
+  if (crowd.level === "normal") return "무난해요";
+  if (crowd.level === "busy") return "약간 붐벼요";
+  return "많이 붐벼요";
 }
 
 function daysUntil(startsAt: string) {
@@ -422,6 +434,18 @@ function currentOutingId() {
 type HomeTab = "home" | "places" | "type" | "outings";
 type CreateStep = 1 | 2 | 3 | 4;
 
+function getInitialHomeTab(sharedSummerType: SummerTypeKey | null): HomeTab {
+  const requestedTab = new URLSearchParams(window.location.search).get("tab");
+  if (
+    requestedTab === "places" ||
+    requestedTab === "type" ||
+    requestedTab === "outings"
+  ) {
+    return requestedTab;
+  }
+  return sharedSummerType ? "type" : "home";
+}
+
 const CREATE_STEPS: Array<{
   key: CreateStep;
   label: string;
@@ -509,6 +533,31 @@ export default function App() {
     return () => window.removeEventListener("popstate", handlePopState);
   }, []);
 
+  useEffect(() => {
+    try {
+      return graniteEvent.addEventListener("backEvent", {
+        onEvent: () => {
+          const backEvent = new Event(APP_BACK_EVENT, { cancelable: true });
+          if (!window.dispatchEvent(backEvent)) return;
+
+          if (currentOutingId()) {
+            navigate("/");
+            return;
+          }
+
+          void closeView().catch(() => {
+            if (window.history.length > 1) window.history.back();
+          });
+        },
+        onError: () => {
+          // 일반 브라우저에서는 네이티브 뒤로가기 이벤트를 제공하지 않아요.
+        },
+      });
+    } catch {
+      return undefined;
+    }
+  }, []);
+
   return outingId ? (
     <OutingPage outingId={outingId} onHome={() => navigate("/")} />
   ) : (
@@ -574,8 +623,17 @@ function HomePage({
   const sharedSummerType = isSummerTypeKey(sharedSummerTypeValue)
     ? sharedSummerTypeValue
     : null;
-  const [activeTab, setActiveTab] = useState<HomeTab>(
-    sharedSummerType ? "type" : "home",
+  const [activeTab, setActiveTab] = useState<HomeTab>(() =>
+    getInitialHomeTab(sharedSummerType),
+  );
+  const [homeHighlightIndex, setHomeHighlightIndex] = useState(0);
+  const [homeHighlightPaused, setHomeHighlightPaused] = useState(false);
+  const rotatingCrowdHighlights = useMemo(
+    () =>
+      crowdHighlights
+        .filter((place) => place.currentCrowd != null)
+        .slice(0, 4),
+    [crowdHighlights],
   );
 
   useEffect(() => {
@@ -638,6 +696,58 @@ function HomePage({
       cancelled = true;
     };
   }, []);
+
+  useEffect(() => {
+    if (homeHighlightIndex < rotatingCrowdHighlights.length) return;
+    setHomeHighlightIndex(0);
+  }, [homeHighlightIndex, rotatingCrowdHighlights.length]);
+
+  useEffect(() => {
+    if (
+      activeTab !== "home" ||
+      homeHighlightPaused ||
+      rotatingCrowdHighlights.length <= 1 ||
+      window.matchMedia("(prefers-reduced-motion: reduce)").matches
+    ) {
+      return;
+    }
+    const timer = window.setInterval(() => {
+      setHomeHighlightIndex(
+        (current) => (current + 1) % rotatingCrowdHighlights.length,
+      );
+    }, 5_500);
+    return () => window.clearInterval(timer);
+  }, [
+    activeTab,
+    homeHighlightPaused,
+    rotatingCrowdHighlights.length,
+  ]);
+
+  useEffect(() => {
+    if (activeTab !== "home") setHomeHighlightPaused(false);
+  }, [activeTab]);
+
+  useEffect(() => {
+    const handleAppBack = (event: Event) => {
+      if (document.querySelector(".sheet-layer")) return;
+      if (activeTab === "home") return;
+      event.preventDefault();
+      event.stopImmediatePropagation();
+      setActiveTab("home");
+      const url = new URL(window.location.href);
+      url.searchParams.delete("tab");
+      url.searchParams.delete("summerType");
+      window.history.replaceState(
+        window.history.state,
+        "",
+        `${url.pathname}${url.search}${url.hash}`,
+      );
+      window.scrollTo({ top: 0, behavior: "smooth" });
+    };
+
+    window.addEventListener(APP_BACK_EVENT, handleAppBack);
+    return () => window.removeEventListener(APP_BACK_EVENT, handleAppBack);
+  }, [activeTab]);
 
   useEffect(() => {
     if (sessions.length === 0) {
@@ -805,6 +915,18 @@ function HomePage({
   );
   const selectTab = (tab: HomeTab) => {
     setActiveTab(tab);
+    const url = new URL(window.location.href);
+    if (tab === "home") {
+      url.searchParams.delete("tab");
+      url.searchParams.delete("summerType");
+    } else {
+      url.searchParams.set("tab", tab);
+    }
+    window.history.replaceState(
+      window.history.state,
+      "",
+      `${url.pathname}${url.search}${url.hash}`,
+    );
     window.scrollTo({ top: 0, behavior: "smooth" });
     track("home_tab_selected", { tab });
   };
@@ -981,6 +1103,30 @@ function HomePage({
 
     return shareResult;
   };
+  const featuredCrowdPlace =
+    rotatingCrowdHighlights[homeHighlightIndex] ??
+    crowdHighlights[0] ??
+    null;
+  const featuredCrowd = featuredCrowdPlace?.currentCrowd ?? null;
+  const featuredWeather =
+    weatherHighlights.find((region) => region.id === "seoul")?.weather ??
+    weatherHighlights[0]?.weather ??
+    null;
+  const featuredPlaceName =
+    featuredCrowdPlace?.name.replace(" 한강공원", "") ?? "한강";
+  const featuredCrowdHeadline = crowdHeadline(featuredCrowd);
+  const featuredWeatherLabel = weatherHighlightsLoading
+    ? "서울 날씨를 불러오는 중"
+    : featuredWeather
+      ? `서울 ${featuredWeather.maxTemperature}° · ${featuredWeather.condition} · 비 ${featuredWeather.precipitationProbability}%`
+      : "서울 날씨와 한강 혼잡도 확인";
+  const featuredFreshnessLabel = featuredCrowd
+    ? `${featuredCrowd.observedAt.slice(11, 16)} 기준 · ${
+        featuredCrowd.mode === "live" ? "서울 실시간" : "시간대 예상"
+      }`
+    : crowdHighlightsLoading
+      ? "혼잡 정보를 불러오는 중"
+      : "장소별 혼잡 정보 확인";
 
   return (
     <main className="app home-app" aria-label="챙겨썸">
@@ -994,7 +1140,6 @@ function HomePage({
               draggable={false}
             />
             <div className="home-hero__content">
-              <div className="brand-pill">챙겨썸</div>
               <h1>
                 이번 여름 모임,
                 <br />
@@ -1027,21 +1172,34 @@ function HomePage({
               <button
                 className="home-shortcut home-shortcut--places"
                 type="button"
+                aria-label={`장소와 날씨. ${featuredPlaceName}, 지금 ${featuredCrowdHeadline}. ${featuredWeatherLabel}. ${featuredFreshnessLabel}`}
                 onClick={() => selectTab("places")}
+                onPointerEnter={() => setHomeHighlightPaused(true)}
+                onPointerLeave={() => setHomeHighlightPaused(false)}
+                onFocus={() => setHomeHighlightPaused(true)}
+                onBlur={() => setHomeHighlightPaused(false)}
               >
                 <img
                   className="home-shortcut__background"
-                  src="/assets/home-card-places-v1.webp"
+                  src="/assets/home-card-places-v2.webp"
                   alt=""
                   draggable={false}
                 />
-                <span className="home-shortcut__content">
-                  <strong>장소와 날씨</strong>
-                  <small>
-                    {crowdHighlights[0]?.currentCrowd?.populationRange
-                      ? `${crowdHighlights[0].name.replace(" 한강공원", "")} ${crowdHighlights[0].currentCrowd.populationRange}`
-                      : "한강 혼잡도 확인"}
-                  </small>
+                <span
+                  className="home-shortcut__summary"
+                  key={featuredCrowdPlace?.id ?? "places-loading"}
+                >
+                  <span className="home-shortcut__eyebrow">
+                    장소와 날씨
+                  </span>
+                  <strong className="home-shortcut__headline">
+                    <span>{featuredPlaceName}, 지금</span>
+                    <span>{featuredCrowdHeadline}</span>
+                  </strong>
+                  <span className="home-shortcut__weather">
+                    {featuredWeatherLabel}
+                  </span>
+                  <small>{featuredFreshnessLabel}</small>
                 </span>
                 <ChevronRightIcon aria-hidden="true" />
               </button>
@@ -1106,7 +1264,6 @@ function HomePage({
           aria-labelledby="places-tab-title"
         >
           <header className="home-tab-header">
-            <div className="brand-pill">챙겨썸</div>
             <p className="eyebrow">SUMMER MAP</p>
             <h1 id="places-tab-title">장소와 날씨</h1>
             <span>어디로 갈지, 언제 출발할지 한눈에 확인해요.</span>
@@ -1128,7 +1285,6 @@ function HomePage({
           aria-labelledby="type-tab-title"
         >
           <header className="home-tab-header">
-            <div className="brand-pill">챙겨썸</div>
             <p className="eyebrow">30 SECOND TEST</p>
             <h1 id="type-tab-title">나의 여름 준비 유형</h1>
             <span>친구와 결과를 나누고 찰떡 준비 파트너를 찾아보세요.</span>
@@ -1148,7 +1304,6 @@ function HomePage({
         >
           <header className="home-tab-header home-tab-header--with-action">
             <div>
-              <div className="brand-pill">챙겨썸</div>
               <p className="eyebrow">MY SUMMER</p>
               <h1 id="outings-tab-title">내 여름 모임</h1>
               <span>준비 중인 모임과 친구들의 진행률을 확인해요.</span>
@@ -1778,7 +1933,7 @@ function OutingPage({
   const [maxItems, setMaxItems] = useState(15);
   const [customDraft, setCustomDraft] = useState("");
   const [inviteOpen, setInviteOpen] = useState(false);
-  const [joinOpen, setJoinOpen] = useState(!session && Boolean(inviteCode));
+  const [joinOpen, setJoinOpen] = useState(false);
   const [copied, setCopied] = useState(false);
   const [notice, setNotice] = useState("");
   const [error, setError] = useState("");
@@ -1836,8 +1991,15 @@ function OutingPage({
 
   useEffect(() => {
     if (!session) return;
-    const timer = window.setInterval(() => void refresh(), 2500);
-    return () => window.clearInterval(timer);
+    const refreshWhenVisible = () => {
+      if (document.visibilityState === "visible") void refresh();
+    };
+    const timer = window.setInterval(refreshWhenVisible, 10_000);
+    document.addEventListener("visibilitychange", refreshWhenVisible);
+    return () => {
+      window.clearInterval(timer);
+      document.removeEventListener("visibilitychange", refreshWhenVisible);
+    };
   }, [refresh, session]);
 
   const loadCrowd = useCallback(async () => {
@@ -1890,22 +2052,6 @@ function OutingPage({
     }
     previousReadyCount.current = nextReadyCount;
   }, [bundle]);
-
-  useEffect(() => {
-    if (
-      !bundle?.viewer ||
-      bundle.participants.length < 2 ||
-      bundle.items.some(
-        (item) => item.owner?.id === bundle.viewer?.id,
-      ) ||
-      !bundle.items.some((item) => item.owner == null)
-    ) {
-      return;
-    }
-    const dismissedKey = `chaengyeosum.claim-dismissed.${outingId}.${bundle.viewer.id}`;
-    if (window.sessionStorage.getItem(dismissedKey) === "1") return;
-    setClaimOpen(true);
-  }, [bundle, outingId]);
 
   const runMutation = async (
     mutate: (activeSession: ParticipantSession) => Promise<unknown>,
@@ -2069,12 +2215,6 @@ function OutingPage({
   };
 
   const dismissClaim = () => {
-    if (bundle?.viewer) {
-      window.sessionStorage.setItem(
-        `chaengyeosum.claim-dismissed.${outingId}.${bundle.viewer.id}`,
-        "1",
-      );
-    }
     setClaimOpen(false);
   };
 
@@ -2239,6 +2379,11 @@ function OutingPage({
     : [];
   const myReady = myItems.length > 0 && myItems.every((item) => item.done);
   const unassignedItems = bundle.items.filter((item) => item.owner == null);
+  const needsOwnItem =
+    Boolean(bundle.viewer) &&
+    bundle.participants.length >= 2 &&
+    !bundle.items.some((item) => item.owner?.id === bundle.viewer?.id) &&
+    unassignedItems.length > 0;
   const existingItemKeys = new Set(bundle.items.map((item) => item.key));
   const smartRecommendations = bundle.smartRecommendations ?? [];
   const events = bundle.events ?? [];
@@ -2262,23 +2407,6 @@ function OutingPage({
           draggable={false}
         />
         <div className="hero-content">
-          <div className="hero-navigation">
-            <button
-              className="hero-back-button"
-              type="button"
-              aria-label="내 모임으로 돌아가기"
-              onClick={onHome}
-            >
-              <ChevronLeftIcon aria-hidden="true" />
-            </button>
-            <button
-              className="brand-pill brand-button"
-              type="button"
-              onClick={onHome}
-            >
-              챙겨썸
-            </button>
-          </div>
           <p className="outing-date">
             {formatDateLabel(bundle.outing.startsAt)}
           </p>
@@ -2303,6 +2431,19 @@ function OutingPage({
           </div>
         </div>
       </section>
+
+      {!bundle.viewer && inviteCode ? (
+        <section className="invite-entry-card" aria-labelledby="invite-entry-title">
+          <div>
+            <span>초대받은 모임이에요</span>
+            <h2 id="invite-entry-title">친구들과 준비물을 나눠 맡아보세요</h2>
+            <p>참여하기를 누른 뒤 이름과 내가 챙길 준비물을 골라요.</p>
+          </div>
+          <button type="button" onClick={() => setJoinOpen(true)}>
+            모임 참여하기
+          </button>
+        </section>
+      ) : null}
 
       <section className="readiness" aria-labelledby="readiness-title">
         <h2 id="readiness-title">
@@ -2348,6 +2489,20 @@ function OutingPage({
               {unassignedItems.length}개 준비물의 주인을 찾고 있어요
             </strong>
             <small>친구에게 하나 맡아달라고 해볼까요?</small>
+          </span>
+          <ChevronRightIcon aria-hidden="true" />
+        </button>
+      ) : null}
+
+      {needsOwnItem ? (
+        <button
+          className="claim-nudge"
+          type="button"
+          onClick={() => setClaimOpen(true)}
+        >
+          <span>
+            <strong>내가 챙길 준비물을 골라볼까요?</strong>
+            <small>아직 주인이 없는 준비물 {unassignedItems.length}개</small>
           </span>
           <ChevronRightIcon aria-hidden="true" />
         </button>

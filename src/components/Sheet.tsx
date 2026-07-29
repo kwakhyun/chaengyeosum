@@ -23,6 +23,11 @@ export function Sheet({
   const descriptionId = useId();
   const dialogRef = useRef<HTMLElement>(null);
   const closeRef = useRef<HTMLButtonElement>(null);
+  const onCloseRef = useRef(onClose);
+
+  useEffect(() => {
+    onCloseRef.current = onClose;
+  }, [onClose]);
 
   useEffect(() => {
     if (!open) return;
@@ -32,7 +37,7 @@ export function Sheet({
     const handleKeyDown = (event: KeyboardEvent) => {
       if (event.key === "Escape") {
         event.preventDefault();
-        onClose();
+        onCloseRef.current();
         return;
       }
       if (event.key !== "Tab" || !dialogRef.current) return;
@@ -59,7 +64,20 @@ export function Sheet({
       window.removeEventListener("keydown", handleKeyDown);
       previousFocus?.focus();
     };
-  }, [onClose, open]);
+  }, [open]);
+
+  useEffect(() => {
+    if (!open) return;
+    const handleAppBack = (event: Event) => {
+      event.preventDefault();
+      event.stopImmediatePropagation();
+      onCloseRef.current();
+    };
+
+    window.addEventListener("chaengyeosum:back", handleAppBack);
+    return () =>
+      window.removeEventListener("chaengyeosum:back", handleAppBack);
+  }, [open]);
 
   if (!open) return null;
 
@@ -95,4 +113,3 @@ export function Sheet({
     </div>
   );
 }
-
