@@ -420,6 +420,18 @@ function currentOutingId() {
 }
 
 type HomeTab = "home" | "places" | "type" | "outings";
+type CreateStep = 1 | 2 | 3 | 4;
+
+const CREATE_STEPS: Array<{
+  key: CreateStep;
+  label: string;
+  description: string;
+}> = [
+  { key: 1, label: "기본", description: "어떤 모임인지 알려주세요." },
+  { key: 2, label: "장소", description: "장소와 인원을 정해요." },
+  { key: 3, label: "준비물", description: "함께 챙길 것을 골라요." },
+  { key: 4, label: "확인", description: "마지막으로 확인해요." },
+];
 
 function OutingList({
   sessions,
@@ -510,6 +522,8 @@ function HomePage({
   onOpenOuting: (outingId: string) => void;
 }) {
   const [createOpen, setCreateOpen] = useState(false);
+  const [createStep, setCreateStep] = useState<CreateStep>(1);
+  const createFormRef = useRef<HTMLFormElement>(null);
   const [places, setPlaces] = useState<Place[]>([]);
   const [crowdHighlights, setCrowdHighlights] = useState<Place[]>([]);
   const [crowdHighlightsLoading, setCrowdHighlightsLoading] = useState(true);
@@ -759,6 +773,18 @@ function HomePage({
   ]);
 
   const itemCount = selectedItemKeys.length + customItems.length;
+  const selectedActivity =
+    activities.find((activity) => activity.key === form.activityType) ?? null;
+  const selectedPlaceName =
+    selectedCustomPlace?.name ??
+    places.find((place) => place.id === form.placeId)?.name ??
+    "장소를 선택해 주세요";
+  const selectedItemLabels = [
+    ...itemOptions
+      .filter((option) => selectedItemKeys.includes(option.key))
+      .map((option) => option.label),
+    ...customItems,
+  ];
   const updateExpectedPeople = (value: number) => {
     const normalized = Math.min(999, Math.max(1, Math.round(value) || 1));
     setExpectedPeopleDraft(String(normalized));
@@ -781,6 +807,64 @@ function HomePage({
     setActiveTab(tab);
     window.scrollTo({ top: 0, behavior: "smooth" });
     track("home_tab_selected", { tab });
+  };
+  const scrollCreateSheetToTop = () => {
+    window.requestAnimationFrame(() => {
+      createFormRef.current
+        ?.closest<HTMLElement>(".sheet")
+        ?.scrollTo({ top: 0, behavior: "smooth" });
+    });
+  };
+  const openCreateSheet = () => {
+    setCreateStep(1);
+    setError("");
+    setCreateOpen(true);
+  };
+  const closeCreateSheet = () => {
+    setCreateOpen(false);
+    setCreateStep(1);
+    setError("");
+  };
+  const goToCreateStep = (step: CreateStep) => {
+    setCreateStep(step);
+    setError("");
+    scrollCreateSheetToTop();
+    track("outing_create_step_viewed", { step });
+  };
+  const nextCreateStep = () => {
+    if (createStep === 1) {
+      if (!form.title.trim()) {
+        setError("모임 이름을 입력해 주세요.");
+        return;
+      }
+      if (!form.date) {
+        setError("모임 날짜를 선택해 주세요.");
+        return;
+      }
+      if (!form.creatorName.trim()) {
+        setError("친구들이 알아볼 수 있도록 내 이름을 입력해 주세요.");
+        return;
+      }
+      if (!form.activityType) {
+        setError("모임 유형을 선택해 주세요.");
+        return;
+      }
+    }
+    if (createStep === 2) {
+      updateExpectedPeople(Number(expectedPeopleDraft));
+      if (!form.placeId || (customPlaceMode && selectedCustomPlace == null)) {
+        setError("함께 갈 장소를 선택해 주세요.");
+        return;
+      }
+    }
+    if (createStep === 3 && itemCount === 0) {
+      setError("함께 챙길 준비물을 하나 이상 골라 주세요.");
+      return;
+    }
+    goToCreateStep(Math.min(4, createStep + 1) as CreateStep);
+  };
+  const previousCreateStep = () => {
+    goToCreateStep(Math.max(1, createStep - 1) as CreateStep);
   };
 
   const toggleCreateItem = (option: ItemOption) => {
@@ -838,7 +922,7 @@ function HomePage({
         place_id: form.placeId,
       });
       setSessions(getSavedSessions());
-      setCreateOpen(false);
+      closeCreateSheet();
       onOpenOuting(created.outing.outing.id);
     } catch (submitError) {
       setError(
@@ -920,10 +1004,7 @@ function HomePage({
               <button
                 className="home-primary"
                 type="button"
-                onClick={() => {
-                  setError("");
-                  setCreateOpen(true);
-                }}
+                onClick={openCreateSheet}
               >
                 <PlusIcon aria-hidden="true" />
                 새 모임 만들기
@@ -948,8 +1029,12 @@ function HomePage({
                 type="button"
                 onClick={() => selectTab("places")}
               >
-                <span>
-                  <GlobeIcon aria-hidden="true" />
+                <span className="home-shortcut__visual">
+                  <img
+                    src="/assets/item-umbrella.png"
+                    alt=""
+                    draggable={false}
+                  />
                 </span>
                 <strong>장소와 날씨</strong>
                 <small>
@@ -964,8 +1049,12 @@ function HomePage({
                 type="button"
                 onClick={() => selectTab("type")}
               >
-                <span>
-                  <MagicWandIcon aria-hidden="true" />
+                <span className="home-shortcut__visual home-shortcut__visual--character">
+                  <img
+                    src="/assets/summer-type-vibe.webp"
+                    alt=""
+                    draggable={false}
+                  />
                 </span>
                 <strong>성향 테스트</strong>
                 <small>나의 여름 준비 캐릭터</small>
@@ -976,8 +1065,12 @@ function HomePage({
                 type="button"
                 onClick={() => selectTab("outings")}
               >
-                <span>
-                  <CalendarIcon aria-hidden="true" />
+                <span className="home-shortcut__visual">
+                  <img
+                    src="/assets/item-ticket-3d.png"
+                    alt=""
+                    draggable={false}
+                  />
                 </span>
                 <strong>내 모임</strong>
                 <small>{sessions.length}개 모임 준비 중</small>
@@ -1060,10 +1153,7 @@ function HomePage({
             <button
               type="button"
               aria-label="새 모임 만들기"
-              onClick={() => {
-                setError("");
-                setCreateOpen(true);
-              }}
+              onClick={openCreateSheet}
             >
               <PlusIcon aria-hidden="true" />
             </button>
@@ -1121,325 +1211,543 @@ function HomePage({
 
       <Sheet
         open={createOpen}
-        onClose={() => setCreateOpen(false)}
+        onClose={closeCreateSheet}
         title="새 모임 만들기"
-        description="날짜와 장소를 정하면 함께 챙길 목록을 바로 만들어드려요."
+        description={CREATE_STEPS[createStep - 1].description}
       >
-        <form className="create-form" onSubmit={submit}>
-          <label>
-            <span>모임 이름</span>
-            <input
-              required
-              maxLength={32}
-              value={form.title}
-              onChange={(event) =>
-                setForm((current) => ({
-                  ...current,
-                  title: event.target.value,
-                }))
-              }
-              placeholder="예: 한강 물놀이"
-            />
-          </label>
-          <div className="form-grid">
-            <label>
-              <span>날짜</span>
-              <input
-                required
-                type="date"
-                min={new Date().toISOString().slice(0, 10)}
-                value={form.date}
-                onChange={(event) =>
-                  setForm((current) => ({
-                    ...current,
-                    date: event.target.value,
-                  }))
+        <form
+          ref={createFormRef}
+          className="create-form create-form--steps"
+          onSubmit={(event) => {
+            if (createStep < 4) {
+              event.preventDefault();
+              nextCreateStep();
+              return;
+            }
+            void submit(event);
+          }}
+        >
+          <ol className="create-progress" aria-label="모임 만들기 진행 단계">
+            {CREATE_STEPS.map((step) => (
+              <li
+                className={
+                  step.key === createStep
+                    ? "is-current"
+                    : step.key < createStep
+                      ? "is-complete"
+                      : ""
                 }
-              />
-            </label>
-            <label>
-              <span>내 이름</span>
-              <input
-                required
-                maxLength={10}
-                value={form.creatorName}
-                onChange={(event) =>
-                  setForm((current) => ({
-                    ...current,
-                    creatorName: event.target.value,
-                  }))
-                }
-                placeholder="닉네임"
-              />
-            </label>
-          </div>
-          <fieldset className="activity-picker">
-            <legend>어떤 모임인가요?</legend>
-            <div>
-              {activities.map((activity) => (
+                key={step.key}
+              >
                 <button
-                  className={
-                    form.activityType === activity.key ? "is-selected" : ""
-                  }
                   type="button"
-                  key={activity.key}
-                  aria-pressed={form.activityType === activity.key}
-                  onClick={() =>
+                  disabled={step.key > createStep}
+                  aria-current={step.key === createStep ? "step" : undefined}
+                  aria-label={`${step.key}단계 ${step.label}${
+                    step.key < createStep ? ", 완료" : ""
+                  }`}
+                  onClick={() => goToCreateStep(step.key)}
+                >
+                  <span>
+                    {step.key < createStep ? (
+                      <CheckIcon aria-hidden="true" />
+                    ) : (
+                      step.key
+                    )}
+                  </span>
+                  <strong>{step.label}</strong>
+                </button>
+              </li>
+            ))}
+          </ol>
+
+          {createStep === 1 ? (
+            <section
+              className="create-step-panel"
+              aria-labelledby="create-step-basic"
+            >
+              <div className="create-step-heading">
+                <span>STEP 1</span>
+                <h3 id="create-step-basic">어떤 모임을 만들까요?</h3>
+                <p>친구들이 알아보기 쉬운 정보부터 입력해요.</p>
+              </div>
+              <label>
+                <span>모임 이름</span>
+                <input
+                  autoFocus
+                  required
+                  maxLength={32}
+                  value={form.title}
+                  onChange={(event) =>
                     setForm((current) => ({
                       ...current,
-                      activityType: activity.key,
+                      title: event.target.value,
                     }))
                   }
-                >
-                  <span>{activityIcon(activity.key)}</span>
-                  <strong>{activity.label}</strong>
-                  <small>{activity.description}</small>
-                </button>
-              ))}
-            </div>
-          </fieldset>
-          <div className="people-count-field">
-            <span>몇 명이 함께 가나요?</span>
-            <div className="people-count-control">
-              <button
-                type="button"
-                aria-label="인원 한 명 줄이기"
-                disabled={form.expectedPeople <= 1}
-                onClick={() => updateExpectedPeople(form.expectedPeople - 1)}
-              >
-                −
-              </button>
-              <label>
-                <input
-                  required
-                  type="number"
-                  inputMode="numeric"
-                  min={1}
-                  max={999}
-                  value={expectedPeopleDraft}
-                  aria-label="함께 가는 인원수"
-                  onChange={(event) => {
-                    const value = event.target.value;
-                    setExpectedPeopleDraft(value);
-                    if (value !== "" && Number.isFinite(Number(value))) {
+                  placeholder="예: 한강 물놀이"
+                />
+              </label>
+              <div className="form-grid">
+                <label>
+                  <span>날짜</span>
+                  <input
+                    required
+                    type="date"
+                    min={new Date().toISOString().slice(0, 10)}
+                    value={form.date}
+                    onChange={(event) =>
                       setForm((current) => ({
                         ...current,
-                        expectedPeople: Math.min(
-                          999,
-                          Math.max(1, Math.round(Number(value))),
-                        ),
-                      }));
+                        date: event.target.value,
+                      }))
                     }
-                  }}
-                  onBlur={() =>
-                    updateExpectedPeople(Number(expectedPeopleDraft))
-                  }
-                />
-                <span>명</span>
-              </label>
-              <button
-                type="button"
-                aria-label="인원 한 명 늘리기"
-                disabled={form.expectedPeople >= 999}
-                onClick={() => updateExpectedPeople(form.expectedPeople + 1)}
-              >
-                +
-              </button>
-            </div>
-            <small>인원에 맞춰 물·수건·공용 준비물 수량을 계산해요.</small>
-          </div>
-          <fieldset className="place-picker">
-            <legend>장소</legend>
-            <div className="place-picker__tabs">
-              <button
-                type="button"
-                aria-pressed={!customPlaceMode}
-                onClick={() => {
-                  setCustomPlaceMode(false);
-                  setSelectedCustomPlace(null);
-                  setForm((current) => ({
-                    ...current,
-                    placeId: places[0]?.id ?? "yeouido-hangang",
-                  }));
-                }}
-              >
-                추천 장소
-              </button>
-              <button
-                type="button"
-                aria-pressed={customPlaceMode}
-                onClick={() => {
-                  setCustomPlaceMode(true);
-                  setForm((current) => ({ ...current, placeId: "" }));
-                }}
-              >
-                직접 검색
-              </button>
-            </div>
-            {customPlaceMode ? (
-              <div className="place-search">
-                <label>
-                  <MagnifyingGlassIcon aria-hidden="true" />
-                  <input
-                    aria-label="장소 검색"
-                    value={customPlaceQuery}
-                    onChange={(event) => {
-                      setCustomPlaceQuery(event.target.value);
-                      setSelectedCustomPlace(null);
-                      setForm((current) => ({ ...current, placeId: "" }));
-                    }}
-                    placeholder="예: 송정해수욕장, 서울숲"
                   />
                 </label>
-                {selectedCustomPlace ? (
-                  <div className="place-search__selected">
-                    <CheckIcon aria-hidden="true" />
-                    <span>
-                      <strong>{selectedCustomPlace.name}</strong>
-                      <small>이 장소의 좌표로 날씨를 확인해요.</small>
-                    </span>
-                  </div>
-                ) : (
-                  <div className="place-search__results">
-                    {placeSearching ? (
-                      <p>장소를 찾고 있어요…</p>
-                    ) : customPlaceQuery.trim().length >= 2 &&
-                      customPlaceResults.length === 0 ? (
-                      <p>검색 결과가 없어요. 지역명을 함께 입력해 보세요.</p>
-                    ) : (
-                      customPlaceResults.map((place) => (
-                        <button
-                          type="button"
-                          key={place.id}
-                          onClick={() => {
-                            setSelectedCustomPlace(place);
-                            setCustomPlaceQuery(place.name);
-                            setForm((current) => ({
-                              ...current,
-                              placeId: place.id,
-                            }));
-                          }}
-                        >
-                          <span>{place.name}</span>
-                          <ChevronRightIcon aria-hidden="true" />
-                        </button>
-                      ))
-                    )}
-                  </div>
-                )}
+                <label>
+                  <span>내 이름</span>
+                  <input
+                    required
+                    maxLength={10}
+                    value={form.creatorName}
+                    onChange={(event) =>
+                      setForm((current) => ({
+                        ...current,
+                        creatorName: event.target.value,
+                      }))
+                    }
+                    placeholder="닉네임"
+                  />
+                </label>
               </div>
-            ) : (
-              <select
-                required
-                aria-label="장소"
-                value={form.placeId}
-                onChange={(event) =>
-                  setForm((current) => ({
-                    ...current,
-                    placeId: event.target.value,
-                  }))
-                }
-              >
-                {places.map((place) => (
-                  <option key={place.id} value={place.id}>
-                    {place.name}
-                    {place.currentCrowd
-                      ? ` · ${place.currentCrowd.label}`
-                      : ""}
-                  </option>
-                ))}
-              </select>
-            )}
-          </fieldset>
-          <section
-            className="item-picker-section"
-            aria-labelledby="create-items-title"
-          >
-            <div className="smart-recommendation-intro" role="status">
-              <span>
-                <MagicWandIcon aria-hidden="true" />
-              </span>
-              <div>
-                <strong>
-                  {recommending
-                    ? "날씨를 확인하고 있어요"
-                    : "날씨와 활동에 맞춰 골랐어요"}
-                </strong>
-                <small>{weatherPreview || "추천 준비물을 준비 중이에요"}</small>
-              </div>
-            </div>
-            <div className="item-picker-heading">
-              <div>
-                <strong id="create-items-title">함께 챙길 준비물</strong>
-                <span>필요한 것만 선택해요</span>
-              </div>
-              <b>
-                {itemCount}/{maxItems}
-              </b>
-            </div>
-            <ItemPicker
-              options={itemOptions}
-              selectedKeys={new Set(selectedItemKeys)}
-              recommendationReasons={recommendationReasons}
-              onToggle={toggleCreateItem}
-            />
-            <div className="custom-item-input">
-              <input
-                maxLength={16}
-                value={customDraft}
-                aria-label="직접 준비물 입력"
-                placeholder="목록에 없나요? 직접 입력"
-                onChange={(event) => setCustomDraft(event.target.value)}
-                onKeyDown={(event) => {
-                  if (event.key === "Enter") {
-                    event.preventDefault();
-                    addCreateCustomItem();
-                  }
-                }}
-              />
-              <button
-                type="button"
-                disabled={!customDraft.trim() || itemCount >= maxItems}
-                onClick={addCreateCustomItem}
-              >
-                추가
-              </button>
-            </div>
-            {customItems.length > 0 ? (
-              <div className="custom-item-tags" aria-label="직접 추가한 준비물">
-                {customItems.map((item) => (
-                  <span className="custom-item-tag" key={item}>
-                    {item}
+              <fieldset className="activity-picker">
+                <legend>어떤 모임인가요?</legend>
+                <div>
+                  {activities.map((activity) => (
                     <button
+                      className={
+                        form.activityType === activity.key ? "is-selected" : ""
+                      }
                       type="button"
-                      aria-label={`${item} 삭제`}
+                      key={activity.key}
+                      aria-pressed={form.activityType === activity.key}
                       onClick={() =>
-                        setCustomItems((current) =>
-                          current.filter((currentItem) => currentItem !== item),
-                        )
+                        setForm((current) => ({
+                          ...current,
+                          activityType: activity.key,
+                        }))
                       }
                     >
-                      <Cross2Icon aria-hidden="true" />
+                      <span>{activityIcon(activity.key)}</span>
+                      <strong>{activity.label}</strong>
+                      <small>{activity.description}</small>
                     </button>
-                  </span>
-                ))}
+                  ))}
+                </div>
+              </fieldset>
+            </section>
+          ) : null}
+
+          {createStep === 2 ? (
+            <section
+              className="create-step-panel"
+              aria-labelledby="create-step-place"
+            >
+              <div className="create-step-heading">
+                <span>STEP 2</span>
+                <h3 id="create-step-place">어디서 몇 명이 만날까요?</h3>
+                <p>인원과 장소에 맞춰 날씨와 준비물 수량을 계산해요.</p>
               </div>
-            ) : null}
-          </section>
+              <div className="people-count-field">
+                <span>함께 가는 인원</span>
+                <div className="people-count-control">
+                  <button
+                    type="button"
+                    aria-label="인원 한 명 줄이기"
+                    disabled={form.expectedPeople <= 1}
+                    onClick={() =>
+                      updateExpectedPeople(form.expectedPeople - 1)
+                    }
+                  >
+                    −
+                  </button>
+                  <label>
+                    <input
+                      required
+                      type="number"
+                      inputMode="numeric"
+                      min={1}
+                      max={999}
+                      value={expectedPeopleDraft}
+                      aria-label="함께 가는 인원수"
+                      onChange={(event) => {
+                        const value = event.target.value;
+                        setExpectedPeopleDraft(value);
+                        if (value !== "" && Number.isFinite(Number(value))) {
+                          setForm((current) => ({
+                            ...current,
+                            expectedPeople: Math.min(
+                              999,
+                              Math.max(1, Math.round(Number(value))),
+                            ),
+                          }));
+                        }
+                      }}
+                      onBlur={() =>
+                        updateExpectedPeople(Number(expectedPeopleDraft))
+                      }
+                    />
+                    <span>명</span>
+                  </label>
+                  <button
+                    type="button"
+                    aria-label="인원 한 명 늘리기"
+                    disabled={form.expectedPeople >= 999}
+                    onClick={() =>
+                      updateExpectedPeople(form.expectedPeople + 1)
+                    }
+                  >
+                    +
+                  </button>
+                </div>
+                <small>
+                  인원에 맞춰 물·수건·공용 준비물 수량을 계산해요.
+                </small>
+              </div>
+              <fieldset className="place-picker">
+                <legend>만날 장소</legend>
+                <div className="place-picker__tabs">
+                  <button
+                    type="button"
+                    aria-pressed={!customPlaceMode}
+                    onClick={() => {
+                      setCustomPlaceMode(false);
+                      setSelectedCustomPlace(null);
+                      setForm((current) => ({
+                        ...current,
+                        placeId: places[0]?.id ?? "yeouido-hangang",
+                      }));
+                    }}
+                  >
+                    추천 장소
+                  </button>
+                  <button
+                    type="button"
+                    aria-pressed={customPlaceMode}
+                    onClick={() => {
+                      setCustomPlaceMode(true);
+                      setForm((current) => ({ ...current, placeId: "" }));
+                    }}
+                  >
+                    직접 검색
+                  </button>
+                </div>
+                {customPlaceMode ? (
+                  <div className="place-search">
+                    <label>
+                      <MagnifyingGlassIcon aria-hidden="true" />
+                      <input
+                        aria-label="장소 검색"
+                        value={customPlaceQuery}
+                        onChange={(event) => {
+                          setCustomPlaceQuery(event.target.value);
+                          setSelectedCustomPlace(null);
+                          setForm((current) => ({ ...current, placeId: "" }));
+                        }}
+                        placeholder="예: 송정해수욕장, 서울숲"
+                      />
+                    </label>
+                    {selectedCustomPlace ? (
+                      <div className="place-search__selected">
+                        <CheckIcon aria-hidden="true" />
+                        <span>
+                          <strong>{selectedCustomPlace.name}</strong>
+                          <small>이 장소의 좌표로 날씨를 확인해요.</small>
+                        </span>
+                      </div>
+                    ) : (
+                      <div className="place-search__results">
+                        {placeSearching ? (
+                          <p>장소를 찾고 있어요…</p>
+                        ) : customPlaceQuery.trim().length >= 2 &&
+                          customPlaceResults.length === 0 ? (
+                          <p>
+                            검색 결과가 없어요. 지역명을 함께 입력해 보세요.
+                          </p>
+                        ) : (
+                          customPlaceResults.map((place) => (
+                            <button
+                              type="button"
+                              key={place.id}
+                              onClick={() => {
+                                setSelectedCustomPlace(place);
+                                setCustomPlaceQuery(place.name);
+                                setForm((current) => ({
+                                  ...current,
+                                  placeId: place.id,
+                                }));
+                              }}
+                            >
+                              <span>{place.name}</span>
+                              <ChevronRightIcon aria-hidden="true" />
+                            </button>
+                          ))
+                        )}
+                      </div>
+                    )}
+                  </div>
+                ) : (
+                  <select
+                    required
+                    aria-label="장소"
+                    value={form.placeId}
+                    onChange={(event) =>
+                      setForm((current) => ({
+                        ...current,
+                        placeId: event.target.value,
+                      }))
+                    }
+                  >
+                    {places.map((place) => (
+                      <option key={place.id} value={place.id}>
+                        {place.name}
+                        {place.currentCrowd
+                          ? ` · ${place.currentCrowd.label}`
+                          : ""}
+                      </option>
+                    ))}
+                  </select>
+                )}
+              </fieldset>
+            </section>
+          ) : null}
+
+          {createStep === 3 ? (
+            <section
+              className="create-step-panel"
+              aria-labelledby="create-items-title"
+            >
+              <div className="create-step-heading">
+                <span>STEP 3</span>
+                <h3 id="create-items-title">무엇을 함께 챙길까요?</h3>
+                <p>AI 추천 목록에서 필요한 것만 골라보세요.</p>
+              </div>
+              <div className="smart-recommendation-intro" role="status">
+                <span>
+                  <MagicWandIcon aria-hidden="true" />
+                </span>
+                <div>
+                  <strong>
+                    {recommending
+                      ? "날씨를 확인하고 있어요"
+                      : "날씨와 활동에 맞춰 골랐어요"}
+                  </strong>
+                  <small>
+                    {weatherPreview || "추천 준비물을 준비 중이에요"}
+                  </small>
+                </div>
+              </div>
+              <div className="item-picker-heading">
+                <div>
+                  <strong>함께 챙길 준비물</strong>
+                  <span>선택한 준비물은 친구들과 나눠 맡아요</span>
+                </div>
+                <b>
+                  {itemCount}/{maxItems}
+                </b>
+              </div>
+              <ItemPicker
+                options={itemOptions}
+                selectedKeys={new Set(selectedItemKeys)}
+                recommendationReasons={recommendationReasons}
+                onToggle={toggleCreateItem}
+              />
+              <div className="custom-item-input">
+                <input
+                  maxLength={16}
+                  value={customDraft}
+                  aria-label="직접 준비물 입력"
+                  placeholder="목록에 없나요? 직접 입력"
+                  onChange={(event) => setCustomDraft(event.target.value)}
+                  onKeyDown={(event) => {
+                    if (event.key === "Enter") {
+                      event.preventDefault();
+                      addCreateCustomItem();
+                    }
+                  }}
+                />
+                <button
+                  type="button"
+                  disabled={!customDraft.trim() || itemCount >= maxItems}
+                  onClick={addCreateCustomItem}
+                >
+                  추가
+                </button>
+              </div>
+              {customItems.length > 0 ? (
+                <div
+                  className="custom-item-tags"
+                  aria-label="직접 추가한 준비물"
+                >
+                  {customItems.map((item) => (
+                    <span className="custom-item-tag" key={item}>
+                      {item}
+                      <button
+                        type="button"
+                        aria-label={`${item} 삭제`}
+                        onClick={() =>
+                          setCustomItems((current) =>
+                            current.filter(
+                              (currentItem) => currentItem !== item,
+                            ),
+                          )
+                        }
+                      >
+                        <Cross2Icon aria-hidden="true" />
+                      </button>
+                    </span>
+                  ))}
+                </div>
+              ) : null}
+            </section>
+          ) : null}
+
+          {createStep === 4 ? (
+            <section
+              className="create-step-panel create-review"
+              aria-labelledby="create-step-review"
+            >
+              <div className="create-review__lead">
+                <img
+                  src="/assets/app-icon.png"
+                  alt=""
+                  draggable={false}
+                />
+                <div>
+                  <span>STEP 4 · FINAL CHECK</span>
+                  <h3 id="create-step-review">이대로 모임을 만들까요?</h3>
+                  <p>만든 뒤에도 준비물은 자유롭게 바꿀 수 있어요.</p>
+                </div>
+              </div>
+              <article className="create-review-card">
+                <div className="create-review-card__heading">
+                  <span>
+                    <CalendarIcon aria-hidden="true" />
+                  </span>
+                  <div>
+                    <small>모임 정보</small>
+                    <strong>{form.title}</strong>
+                  </div>
+                  <button type="button" onClick={() => goToCreateStep(1)}>
+                    수정
+                  </button>
+                </div>
+                <dl>
+                  <div>
+                    <dt>날짜</dt>
+                    <dd>
+                      {new Date(
+                        `${form.date}T00:00:00`,
+                      ).toLocaleDateString("ko-KR", {
+                        month: "long",
+                        day: "numeric",
+                        weekday: "short",
+                      })}
+                    </dd>
+                  </div>
+                  <div>
+                    <dt>유형</dt>
+                    <dd>{selectedActivity?.label ?? "여름 모임"}</dd>
+                  </div>
+                  <div>
+                    <dt>내 이름</dt>
+                    <dd>{form.creatorName}</dd>
+                  </div>
+                </dl>
+              </article>
+              <article className="create-review-card">
+                <div className="create-review-card__heading">
+                  <span>
+                    <GlobeIcon aria-hidden="true" />
+                  </span>
+                  <div>
+                    <small>장소와 인원</small>
+                    <strong>{selectedPlaceName}</strong>
+                  </div>
+                  <button type="button" onClick={() => goToCreateStep(2)}>
+                    수정
+                  </button>
+                </div>
+                <p>{form.expectedPeople}명이 함께 가요</p>
+              </article>
+              <article className="create-review-card">
+                <div className="create-review-card__heading">
+                  <span>
+                    <BackpackIcon aria-hidden="true" />
+                  </span>
+                  <div>
+                    <small>함께 챙길 준비물</small>
+                    <strong>{itemCount}개를 골랐어요</strong>
+                  </div>
+                  <button type="button" onClick={() => goToCreateStep(3)}>
+                    수정
+                  </button>
+                </div>
+                <div
+                  className="create-review-card__items"
+                  aria-label="선택한 준비물"
+                >
+                  {selectedItemLabels.slice(0, 6).map((label) => (
+                    <span key={label}>{label}</span>
+                  ))}
+                  {selectedItemLabels.length > 6 ? (
+                    <span>+{selectedItemLabels.length - 6}개</span>
+                  ) : null}
+                </div>
+              </article>
+            </section>
+          ) : null}
+
           {error ? <p className="form-error">{error}</p> : null}
-          <button
-            className="sheet-primary"
-            type="submit"
-            disabled={
-              submitting ||
-              places.length === 0 ||
-              itemOptions.length === 0 ||
-              itemCount === 0 ||
-              (customPlaceMode && selectedCustomPlace == null)
-            }
+          <div
+            className={`create-step-actions${
+              createStep === 1 ? " create-step-actions--single" : ""
+            }`}
           >
-            {submitting ? "모임을 만들고 있어요…" : "모임 만들기"}
-          </button>
+            {createStep > 1 ? (
+              <button
+                className="create-step-back"
+                type="button"
+                onClick={previousCreateStep}
+              >
+                <ChevronLeftIcon aria-hidden="true" />
+                이전
+              </button>
+            ) : null}
+            {createStep < 4 ? (
+              <button className="sheet-primary" type="submit">
+                {createStep === 1
+                  ? "장소와 인원 정하기"
+                  : createStep === 2
+                    ? "준비물 고르기"
+                    : "마지막으로 확인하기"}
+                <ChevronRightIcon aria-hidden="true" />
+              </button>
+            ) : (
+              <button
+                className="sheet-primary"
+                type="submit"
+                disabled={
+                  submitting ||
+                  places.length === 0 ||
+                  itemOptions.length === 0 ||
+                  itemCount === 0 ||
+                  (customPlaceMode && selectedCustomPlace == null)
+                }
+              >
+                {submitting ? "모임을 만들고 있어요…" : "모임 만들기"}
+              </button>
+            )}
+          </div>
         </form>
       </Sheet>
     </main>
