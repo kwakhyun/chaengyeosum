@@ -1029,19 +1029,20 @@ function HomePage({
                 type="button"
                 onClick={() => selectTab("places")}
               >
-                <span className="home-shortcut__visual">
-                  <img
-                    src="/assets/item-umbrella.png"
-                    alt=""
-                    draggable={false}
-                  />
+                <img
+                  className="home-shortcut__background"
+                  src="/assets/home-card-places-v1.webp"
+                  alt=""
+                  draggable={false}
+                />
+                <span className="home-shortcut__content">
+                  <strong>장소와 날씨</strong>
+                  <small>
+                    {crowdHighlights[0]?.currentCrowd?.populationRange
+                      ? `${crowdHighlights[0].name.replace(" 한강공원", "")} ${crowdHighlights[0].currentCrowd.populationRange}`
+                      : "한강 혼잡도 확인"}
+                  </small>
                 </span>
-                <strong>장소와 날씨</strong>
-                <small>
-                  {crowdHighlights[0]?.currentCrowd?.populationRange
-                    ? `${crowdHighlights[0].name.replace(" 한강공원", "")} ${crowdHighlights[0].currentCrowd.populationRange}`
-                    : "한강 혼잡도 확인"}
-                </small>
                 <ChevronRightIcon aria-hidden="true" />
               </button>
               <button
@@ -1049,15 +1050,16 @@ function HomePage({
                 type="button"
                 onClick={() => selectTab("type")}
               >
-                <span className="home-shortcut__visual home-shortcut__visual--character">
-                  <img
-                    src="/assets/summer-type-vibe.webp"
-                    alt=""
-                    draggable={false}
-                  />
+                <img
+                  className="home-shortcut__background"
+                  src="/assets/home-card-personality-v1.webp"
+                  alt=""
+                  draggable={false}
+                />
+                <span className="home-shortcut__content">
+                  <strong>성향 테스트</strong>
+                  <small>나의 여름 준비 캐릭터</small>
                 </span>
-                <strong>성향 테스트</strong>
-                <small>나의 여름 준비 캐릭터</small>
                 <ChevronRightIcon aria-hidden="true" />
               </button>
               <button
@@ -1065,15 +1067,16 @@ function HomePage({
                 type="button"
                 onClick={() => selectTab("outings")}
               >
-                <span className="home-shortcut__visual">
-                  <img
-                    src="/assets/item-ticket-3d.png"
-                    alt=""
-                    draggable={false}
-                  />
+                <img
+                  className="home-shortcut__background"
+                  src="/assets/home-card-outings-v1.webp"
+                  alt=""
+                  draggable={false}
+                />
+                <span className="home-shortcut__content">
+                  <strong>내 모임</strong>
+                  <small>{sessions.length}개 모임 준비 중</small>
                 </span>
-                <strong>내 모임</strong>
-                <small>{sessions.length}개 모임 준비 중</small>
                 <ChevronRightIcon aria-hidden="true" />
               </button>
             </div>

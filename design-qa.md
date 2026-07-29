@@ -1,64 +1,65 @@
-# Design QA — 단계형 모임 만들기
+# Design QA — 홈 기능 배경 이미지 카드
 
 ## Evidence
 
-- Source visual truth: `/private/tmp/chaengyeosum-create-before.png`
-- Implementation, step 1: `/private/tmp/chaengyeosum-create-after.png`
-- Implementation, review: `/private/tmp/chaengyeosum-create-review.png`
-- Viewport: 1280 × 720 CSS px, desktop canvas with the existing 480 px mobile app surface
-- Pixel dimensions: all captures 1280 × 720 px
-- Density normalization: source and implementation were captured from the same browser, viewport, scale, route, and light theme; no resampling was needed
-- State: new outing creation sheet, default water-play outing; the review capture also contains a completed name input
+- Source visual truth: user-attached `스크린샷 2026-07-29 오전 11.02.58.png`
+- Source pixels: 738 × 688 px, focused crop of the Home toolbox section
+- Implementation screenshot: `/private/tmp/chaengyeosum-home-background-cards.png`
+- Implementation pixels: 1280 × 1064 px
+- CSS viewport: 1280 × 720 px, full-page capture of the existing 480 px mobile app surface
+- State: Home, one saved outing, live crowd summary loaded, light theme
+- Density normalization: the source is a focused crop at a different capture scale, so the cards were compared structurally and visually rather than by raw pixel coordinates. Both source and implementation were placed in the same comparison input.
 
 ## Full-view Comparison
 
-The source exposes the entire form as one scrollable sheet. The implementation preserves the same sheet width, typography, colors, controls, activity choices, and input density while dividing the task into four explicitly labeled steps. The primary action remains visible at the bottom, and the final review step makes the submitted values inspectable before creation.
+The implementation preserves the source hierarchy—one wide Places card followed by two equal feature cards—but replaces the small isolated icons and mostly empty white surfaces with full-bleed, app-owned background imagery. The hero and toolbox now read as one summer visual system while the recent-outing section remains visually subordinate.
 
-The redesigned hierarchy is intentionally different from the source: progress, a step-specific heading, and a sticky action replace the source's uninterrupted field stack. No app-owned content overlaps or clips at the tested viewport.
+The primary card labels, live crowd summary, saved-outing count, and chevrons remain visible and interactive. Fixed bottom navigation does not overlap the full-page card content.
 
 ## Focused Region Comparison
 
-- Header and progress: the sheet title and close control preserve their source placement. The new four-step indicator has readable active, completed, disabled, and current states.
-- Form controls: input height, radius, border, selected activity treatment, and two-column field layout stay aligned with the source design system.
-- Final review: the 3D app asset is sharp and correctly cropped; summary cards use existing blue, gray, radius, and type tokens rather than introducing a conflicting visual language.
-- Home shortcuts: existing production-quality 3D umbrella, character, and ticket assets replace the generic line icons without transparency halos or visible stretching.
+- Places and Weather: a bright Han River picnic image reinforces the live place/weather concept. A pale left-side overlay keeps dark title and population text readable.
+- Personality Test: a purple-blue 3D summer character creates the strongest playful/shareable card. The dark lower overlay preserves white text contrast.
+- My Outings: a blue checklist picnic bag, calendar, and tickets communicate planning and saved outings. The lower-left copy remains clear on the aqua negative space.
+- Image crops: all three subjects remain recognizable at the 148–168 px card heights; no faces, bags, or key weather cues are clipped beyond recognition.
 
 ## Findings
 
-No actionable P0, P1, or P2 issues remain.
+No actionable P0, P1, or P2 issue remains.
 
 ## Required Fidelity Surfaces
 
-- Fonts and typography: existing family and optical weights are preserved; step labels, headings, helper copy, and review values retain a clear hierarchy without broken wrapping.
-- Spacing and layout rhythm: the 480 px mobile surface, 20 px sheet padding, 14–18 px internal gaps, 16–18 px control radii, and sticky footer spacing are consistent with the source.
-- Colors and visual tokens: Toss-like blue primary, neutral grays, selected blue tint, disabled states, and white surfaces remain consistent and meet the existing contrast pattern.
-- Image quality and asset fidelity: all new visible shortcut imagery reuses existing raster 3D assets; no placeholder, CSS drawing, handcrafted SVG, or emoji substitute was introduced.
-- Copy and content: each step asks one clear question, action labels explain the next step, and the review explains that preparation items remain editable after creation.
+- Fonts and typography: the existing Home heading, 17–19 px feature titles, small dynamic summaries, weights, and letter spacing remain consistent. No text wraps or truncates unexpectedly at the tested width.
+- Spacing and layout rhythm: the original 2-column toolbox grid, 10 px gaps, 24 px radii, and vertical content order are preserved. Increasing the image-card height adds visual weight without displacing the primary hero.
+- Colors and visual tokens: generated imagery uses the established blue, white, aqua, lavender, and coral palette. Real image overlays map to existing dark/light text tokens and maintain usable contrast.
+- Image quality and asset fidelity: three unique 1024 px WebP assets are sharp, correctly cropped, and compressed to 46–77 KB. No placeholder, emoji, CSS illustration, handcrafted SVG, or stretched source image is used.
+- Copy and content: feature names and dynamic status copy are unchanged, so stronger imagery does not reduce comprehension or remove useful live information.
 
 ## Interaction and Accessibility Checks
 
-- Opened the creation sheet from Home.
-- Entered the planner name and advanced through Basic → Place → Items → Review.
-- Verified Back and completed-step navigation retain entered values.
-- Verified recommended place, flexible people count, AI packing recommendations, edit buttons, close behavior, and final submit affordance.
-- Verified semantic dialog, step list, field labels, pressed/disabled/current states, and 44–50 px tap targets.
-- Checked the local preview output during the tested flow; no runtime or console error was reported.
+- Verified semantic feature buttons and accessible names remain intact.
+- Opened the Personality Test card and returned through Home navigation.
+- Verified decorative background images have empty alt text and do not duplicate button labels.
+- Verified chevrons, fixed navigation, and card tap targets remain available.
+- Checked local preview output during the flow; no runtime error was reported.
 
 ## Comparison History
 
-- Pass 1: no P0/P1/P2 visual or interaction issue found. No blocking iteration was required.
+- Pass 1: generated assets were not visible because the Sites preview owns a separate public asset directory.
+- Fix: copied the optimized WebP assets into both app and Sites public asset directories.
+- Pass 2 evidence: `/private/tmp/chaengyeosum-home-background-cards.png`; all three images render and no P0/P1/P2 issue remains.
 
 ## Follow-up Polish
 
-- P3: the preparation-item step still needs a short internal scroll when all optional items are reviewed. This is acceptable because it is isolated to one focused task and the primary action remains sticky.
+- P3: if the Home section later gains longer localized copy, the two square cards may need a slightly stronger bottom overlay rather than smaller text.
 
 ## Implementation Checklist
 
-- [x] Split the form into four state-preserving steps
-- [x] Add progress, previous, next, and completed-step navigation
-- [x] Add a final editable review
-- [x] Keep the primary action visible
-- [x] Apply existing 3D assets to Home shortcuts
-- [x] Verify the complete primary flow in the browser
+- [x] Create a distinct Places and Weather background
+- [x] Create a distinct Personality Test background
+- [x] Create a distinct My Outings background
+- [x] Preserve dynamic labels and feature navigation
+- [x] Optimize and copy assets into both app hosting surfaces
+- [x] Verify the full Home flow in the browser
 
 final result: passed
