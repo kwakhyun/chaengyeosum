@@ -6,6 +6,7 @@ const root = dirname(dirname(fileURLToPath(import.meta.url)));
 const read = (path) => readFileSync(join(root, path), "utf8");
 const app = read("src/App.tsx");
 const sheet = read("src/components/Sheet.tsx");
+const popularSummerPlaces = read("src/components/PopularSummerPlaces.tsx");
 const styles = read("src/styles.css");
 const config = read("granite.config.ts");
 const html = read("index.html");
@@ -99,6 +100,14 @@ const checks = [
     pass:
       app.includes('requestedTab === "places"') &&
       app.includes('requestedTab === "type"'),
+  },
+  {
+    name: "여름 인기 워터파크 정보와 모임 생성 진입점 제공",
+    pass:
+      app.includes("<PopularSummerPlaces") &&
+      popularSummerPlaces.includes('place.category === "waterpark"') &&
+      popularSummerPlaces.includes("이 장소로 모임 만들기") &&
+      popularSummerPlaces.includes("참고용 예상치"),
   },
   {
     name: "확대·축소 제스처 비활성화",

@@ -818,6 +818,221 @@ button:disabled {
   font-size: 10px;
 }
 
+.popular-summer-places {
+  display: grid;
+  min-width: 0;
+  gap: 13px;
+  margin: 0 0 30px;
+}
+
+.popular-summer-places__heading {
+  display: flex;
+  align-items: flex-end;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 0 5px;
+}
+
+.popular-summer-places__heading .eyebrow {
+  margin: 0 0 4px;
+  color: #3182f6;
+  font-size: 9px;
+  font-weight: 950;
+  letter-spacing: 0.12em;
+}
+
+.popular-summer-places__heading h2 {
+  margin: 0;
+  color: #191f28;
+  font-size: 21px;
+  font-weight: 850;
+  letter-spacing: -0.05em;
+}
+
+.popular-summer-places__heading > span {
+  display: inline-flex;
+  flex: 0 0 auto;
+  align-items: center;
+  gap: 5px;
+  padding: 6px 9px;
+  border-radius: 999px;
+  background: #fff3d5;
+  color: #b76e00;
+  font-size: 10px;
+  font-weight: 850;
+}
+
+.popular-summer-places__track {
+  display: grid;
+  overflow-x: auto;
+  grid-auto-columns: min(84vw, 340px);
+  grid-auto-flow: column;
+  gap: 11px;
+  margin: 0 -18px;
+  padding: 0 18px 5px;
+  scroll-snap-type: x mandatory;
+  scrollbar-width: none;
+}
+
+.popular-summer-places__track::-webkit-scrollbar {
+  display: none;
+}
+
+.popular-summer-place-card {
+  display: grid;
+  gap: 11px;
+  padding: 17px;
+  border: 1px solid #dce9f5;
+  border-radius: 24px;
+  background:
+    radial-gradient(circle at 100% 0, rgb(49 130 246 / 13%), transparent 42%),
+    #fff;
+  box-shadow: 0 12px 30px rgb(55 88 120 / 9%);
+  scroll-snap-align: center;
+}
+
+.popular-summer-place-card > header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+}
+
+.popular-summer-place-card > header > div {
+  display: flex;
+  min-width: 0;
+  align-items: center;
+  gap: 7px;
+}
+
+.popular-summer-place-card > header span {
+  padding: 5px 8px;
+  border-radius: 9px;
+  background: #e8f3ff;
+  color: #2172e5;
+  font-size: 9px;
+  font-weight: 950;
+}
+
+.popular-summer-place-card > header small {
+  color: #8b95a1;
+  font-size: 10px;
+  font-weight: 700;
+}
+
+.popular-summer-place-card > h3 {
+  margin: 2px 0 -5px;
+  color: #191f28;
+  font-size: 24px;
+  font-weight: 900;
+  letter-spacing: -0.055em;
+}
+
+.popular-summer-place-card > p {
+  min-height: 34px;
+  margin: 0;
+  color: #4e5968;
+  font-size: 12px;
+  font-weight: 700;
+  line-height: 1.45;
+}
+
+.popular-summer-place-card__highlights {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.popular-summer-place-card__highlights span {
+  padding: 6px 8px;
+  border-radius: 9px;
+  background: #f2f6f9;
+  color: #4e5968;
+  font-size: 9px;
+  font-weight: 800;
+}
+
+.popular-summer-place-card__crowd {
+  flex: 0 0 auto;
+  padding: 6px 8px;
+  border-radius: 10px;
+  font-size: 9px;
+  font-weight: 900;
+}
+
+.popular-summer-place-card__crowd--relaxed {
+  background: #e9f9f3;
+  color: #168361;
+}
+
+.popular-summer-place-card__crowd--normal {
+  background: #e8f3ff;
+  color: #2172e5;
+}
+
+.popular-summer-place-card__crowd--busy {
+  background: #fff3d5;
+  color: #b76e00;
+}
+
+.popular-summer-place-card__crowd--very-busy {
+  background: #ffebee;
+  color: #d14343;
+}
+
+.popular-summer-place-card__tip {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+  padding: 11px 12px;
+  border-radius: 14px;
+  background: #fff8e8;
+  color: #8f5b00;
+}
+
+.popular-summer-place-card__tip > svg {
+  flex: 0 0 auto;
+  margin-top: 2px;
+}
+
+.popular-summer-place-card__tip > span {
+  display: grid;
+  gap: 2px;
+}
+
+.popular-summer-place-card__tip small {
+  font-size: 8px;
+  font-weight: 850;
+}
+
+.popular-summer-place-card__tip strong {
+  font-size: 10px;
+  font-weight: 850;
+  line-height: 1.4;
+}
+
+.popular-summer-place-card > button {
+  display: flex;
+  min-height: 42px;
+  align-items: center;
+  justify-content: center;
+  gap: 4px;
+  border: 0;
+  border-radius: 14px;
+  background: #3182f6;
+  color: #fff;
+  font-size: 12px;
+  font-weight: 850;
+}
+
+.popular-summer-places__note {
+  margin: -7px 4px 0;
+  color: #8b95a1;
+  font-size: 9px;
+  line-height: 1.45;
+  text-align: center;
+}
+
 .weather-highlights {
   display: grid;
   gap: 12px;

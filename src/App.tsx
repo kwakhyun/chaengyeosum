@@ -67,6 +67,7 @@ import {
 import { AiBriefingCard } from "./components/AiBriefingCard";
 import { CrowdHighlightsCarousel } from "./components/CrowdHighlightsCarousel";
 import { PlaceIntelligenceCard } from "./components/PlaceIntelligenceCard";
+import { PopularSummerPlaces } from "./components/PopularSummerPlaces";
 import { Sheet } from "./components/Sheet";
 import {
   isSummerTypeKey,
@@ -944,6 +945,18 @@ function HomePage({
     setError("");
     setCreateOpen(true);
   };
+  const startCreateAtPlace = (place: Place) => {
+    setCustomPlaceMode(false);
+    setSelectedCustomPlace(null);
+    setForm((current) => ({
+      ...current,
+      title: `${place.name} 물놀이`,
+      placeId: place.id,
+      activityType: "water-play",
+    }));
+    openCreateSheet();
+    track("popular_summer_place_selected", { place_id: place.id });
+  };
   const closeCreateSheet = () => {
     setCreateOpen(false);
     setCreateStep(1);
@@ -1276,6 +1289,10 @@ function HomePage({
           <CrowdHighlightsCarousel
             places={crowdHighlights}
             loading={crowdHighlightsLoading}
+          />
+          <PopularSummerPlaces
+            places={places}
+            onCreateOuting={startCreateAtPlace}
           />
           <WeatherHighlightsCarousel
             regions={weatherHighlights}

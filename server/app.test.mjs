@@ -403,6 +403,32 @@ test("메인 혼잡 슬라이더에 한강공원 실시간 인구를 제공한�
   );
 });
 
+test("장소 목록에 여름 인기 워터파크와 방문 정보를 제공한다", async () => {
+  await withServer(async (baseUrl) => {
+    const response = await fetch(`${baseUrl}/api/places`);
+    assert.equal(response.status, 200);
+    const payload = await response.json();
+    const waterparks = payload.places.filter(
+      (place) => place.category === "waterpark",
+    );
+
+    assert.deepEqual(
+      waterparks.map((place) => place.id),
+      ["caribbean-bay", "ocean-world", "gimhae-lotte-waterpark"],
+    );
+    assert.ok(
+      waterparks.every(
+        (place) =>
+          place.highlights.length === 3 &&
+          place.tagline &&
+          place.summerTip &&
+          place.officialUrl.startsWith("https://") &&
+          place.currentCrowd.mode === "estimate",
+      ),
+    );
+  });
+});
+
 test("활동 유형에 맞는 스마트 준비물을 추천한다", async () => {
   await withServer(async (baseUrl) => {
     const response = await fetch(

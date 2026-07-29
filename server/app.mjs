@@ -367,6 +367,11 @@ export function createApiServer({
             latitude: place.latitude,
             longitude: place.longitude,
             city: place.city,
+            category: place.category,
+            tagline: place.tagline,
+            highlights: place.highlights,
+            summerTip: place.summerTip,
+            officialUrl: place.officialUrl,
             currentCrowd: estimateCurrentCrowd(place),
           })),
         });

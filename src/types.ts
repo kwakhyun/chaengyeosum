@@ -4,6 +4,11 @@ export interface Place {
   latitude: number;
   longitude: number;
   city?: string;
+  category?: "hangang" | "beach" | "waterpark";
+  tagline?: string;
+  highlights?: string[];
+  summerTip?: string;
+  officialUrl?: string;
   currentCrowd?: CrowdSignal;
 }
 

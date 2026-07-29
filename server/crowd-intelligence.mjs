@@ -42,6 +42,14 @@ function estimateLevel(score) {
 }
 
 function placeKind(place) {
+  if (
+    place.category === "waterpark" ||
+    place.name.includes("워터파크") ||
+    place.name.includes("캐리비안") ||
+    place.name.includes("오션월드")
+  ) {
+    return "waterpark";
+  }
   if (place.name.includes("해수욕장")) return "beach";
   if (place.name.includes("한강") || place.name.includes("공원")) {
     return "park";
@@ -64,10 +72,15 @@ export function estimateCurrentCrowd(place, now = new Date()) {
   }
 
   if (hour >= 18 && hour <= 21) {
-    score += kind === "park" || kind === "beach" ? 14 : 9;
+    score +=
+      kind === "park" || kind === "beach"
+        ? 14
+        : kind === "waterpark"
+          ? 4
+          : 9;
     reasons.push("저녁 인기 시간대예요");
   } else if (hour >= 13 && hour < 18) {
-    score += 8;
+    score += kind === "waterpark" ? 12 : 8;
     reasons.push("오후 방문이 늘어나는 시간이에요");
   } else if (hour < 9 || hour >= 23) {
     score -= 18;
@@ -77,9 +90,17 @@ export function estimateCurrentCrowd(place, now = new Date()) {
     reasons.push("보통 방문 시간대예요");
   }
 
-  if (month >= 6 && month <= 8 && (kind === "park" || kind === "beach")) {
-    score += 8;
-    reasons.push("여름철 인기 야외 장소예요");
+  if (
+    month >= 6 &&
+    month <= 8 &&
+    (kind === "park" || kind === "beach" || kind === "waterpark")
+  ) {
+    score += kind === "waterpark" ? 12 : 8;
+    reasons.push(
+      kind === "waterpark"
+        ? "여름철 인기 워터파크예요"
+        : "여름철 인기 야외 장소예요",
+    );
   }
 
   const normalizedScore = Math.round(clamp(score, 14, 94));
