@@ -24,6 +24,8 @@ export type SummerTypeResult = {
   strengths: [string, string];
   watchOut: string;
   match: SummerTypeKey;
+  image: string;
+  imageAlt: string;
 };
 
 export const SUMMER_TYPE_RESULTS: Record<SummerTypeKey, SummerTypeResult> = {
@@ -38,6 +40,9 @@ export const SUMMER_TYPE_RESULTS: Record<SummerTypeKey, SummerTypeResult> = {
     strengths: ["정리력 만렙", "약속 파토 방지"],
     watchOut: "단톡방 답이 늦으면 혼자 세 번쯤 계획을 고칠 수 있어요.",
     match: "adventurer",
+    image: "/assets/summer-type-planner.webp",
+    imageAlt:
+      "체크리스트와 준비물을 완벽하게 정리하는 파란 모자의 3D 캐릭터",
   },
   guardian: {
     key: "guardian",
@@ -50,6 +55,9 @@ export const SUMMER_TYPE_RESULTS: Record<SummerTypeKey, SummerTypeResult> = {
     strengths: ["센스 있는 대비", "친구 상태 스캔"],
     watchOut: "친구 가방보다 내 비상용 파우치가 더 무거울 수 있어요.",
     match: "vibe",
+    image: "/assets/summer-type-guardian.webp",
+    imageAlt:
+      "우산과 안전 방패로 여름 날씨를 대비하는 노란 우비의 3D 캐릭터",
   },
   vibe: {
     key: "vibe",
@@ -62,6 +70,9 @@ export const SUMMER_TYPE_RESULTS: Record<SummerTypeKey, SummerTypeResult> = {
     strengths: ["분위기 점화", "인생샷 포착"],
     watchOut: "사진은 백 장인데 정작 물병은 두고 올 수 있어요.",
     match: "guardian",
+    image: "/assets/summer-type-vibe.webp",
+    imageAlt:
+      "카메라와 음악으로 여름 추억을 모으는 하트 선글라스의 3D 캐릭터",
   },
   adventurer: {
     key: "adventurer",
@@ -74,6 +85,9 @@ export const SUMMER_TYPE_RESULTS: Record<SummerTypeKey, SummerTypeResult> = {
     strengths: ["출발력 최고", "변수도 콘텐츠"],
     watchOut: "현장 도착 후 ‘누가 챙겼지?’를 가장 먼저 물을 수 있어요.",
     match: "planner",
+    image: "/assets/summer-type-adventurer.webp",
+    imageAlt:
+      "휴대폰 하나 들고 바로 뛰어가는 민트색 모자의 3D 캐릭터",
   },
 };
 
@@ -82,7 +96,7 @@ const QUESTIONS: Array<{
   answers: Array<{ label: string; type: SummerTypeKey }>;
 }> = [
   {
-    title: "여름 약속이 잡혔어요. 가장 먼저 하는 일은?",
+    title: "여름 모임 날짜가 잡혔어요. 가장 먼저 하는 일은?",
     answers: [
       { label: "날짜·장소와 준비물을 먼저 정리한다", type: "planner" },
       { label: "재밌는 사진과 맛집부터 단톡방에 보낸다", type: "vibe" },
@@ -186,7 +200,7 @@ export function SummerTypeTest({
     ? {
         label: "친구 결과 도착",
         title: `친구는 ‘${sharedResult.shortName}’`,
-        description: "나는 어떤 여름 약속 캐릭터인지 30초 만에 확인해요.",
+        description: "나는 어떤 여름 준비 캐릭터인지 30초 만에 확인해요.",
         action: "나도 테스트하기",
       }
     : result
@@ -198,7 +212,7 @@ export function SummerTypeTest({
         }
       : {
           label: "30초 성향 테스트",
-          title: "여름 약속에서 나는 어떤 캐릭터?",
+          title: "여름 모임에서 나는 어떤 캐릭터?",
           description: "4개 질문에 답하고 친구와 결과를 비교해보세요.",
           action: "테스트하기",
         };
@@ -311,7 +325,7 @@ export function SummerTypeTest({
       <Sheet
         open={open}
         onClose={() => setOpen(false)}
-        title={showResult ? "나의 여름 준비 캐릭터" : "여름 약속 성향 테스트"}
+        title={showResult ? "나의 여름 준비 캐릭터" : "여름 모임 성향 테스트"}
         description={
           showResult
             ? "친구에게 보내 서로의 준비 스타일을 비교해보세요."
@@ -325,22 +339,29 @@ export function SummerTypeTest({
               aria-label={`테스트 결과 ${result.name}`}
             >
               <div className="summer-type-result-card__top">
-                <span>나의 여름 약속 유형</span>
+                <span>나의 여름 준비 유형</span>
                 <b>챙겨썸</b>
               </div>
-              <div className="summer-type-result-card__icon">
-                {iconFor(result.key)}
+              <div className="summer-type-result-card__visual">
+                <img
+                  src={result.image}
+                  alt={result.imageAlt}
+                  draggable={false}
+                />
+                <span>{result.shortName}</span>
               </div>
-              <p>{result.tagline}</p>
-              <h3>{result.name}</h3>
-              <div className="summer-type-result-card__chips">
-                {result.strengths.map((strength) => (
-                  <span key={strength}>{strength}</span>
-                ))}
-              </div>
-              <div className="summer-type-result-card__item">
-                <span>나의 시그니처 준비물</span>
-                <strong>{result.signatureItem}</strong>
+              <div className="summer-type-result-card__copy">
+                <p>{result.tagline}</p>
+                <h3>{result.name}</h3>
+                <div className="summer-type-result-card__chips">
+                  {result.strengths.map((strength) => (
+                    <span key={strength}>{strength}</span>
+                  ))}
+                </div>
+                <div className="summer-type-result-card__item">
+                  <span>나의 시그니처 준비물</span>
+                  <strong>{result.signatureItem}</strong>
+                </div>
               </div>
             </article>
 

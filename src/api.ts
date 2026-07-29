@@ -7,6 +7,7 @@ import type {
   ParticipantSession,
   Place,
   PlaceIntelligenceResponse,
+  RegionalWeather,
   SmartRecommendation,
   SummerEventResponse,
 } from "./types";
@@ -50,6 +51,13 @@ export function listCrowdHighlights() {
     places: Place[];
     meta: { generatedAt: number };
   }>("/crowd-highlights");
+}
+
+export function listWeatherHighlights() {
+  return request<{
+    regions: RegionalWeather[];
+    meta: { generatedAt: number; date: string };
+  }>("/weather-highlights");
 }
 
 export function searchPlaces(query: string) {

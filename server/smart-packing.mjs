@@ -79,8 +79,19 @@ export function getActivityType(value) {
   return isActivityType(value) ? value : "picnic";
 }
 
+export const MAX_EXPECTED_PEOPLE = 999;
+
+export function normalizeExpectedPeople(value, fallback = 2) {
+  const parsed = Number(value);
+  if (!Number.isFinite(parsed)) return fallback;
+  return Math.min(
+    MAX_EXPECTED_PEOPLE,
+    Math.max(1, Math.round(parsed)),
+  );
+}
+
 export function getSuggestedQuantity(key, expectedPeople = 2) {
-  const people = Math.min(12, Math.max(1, Number(expectedPeople) || 2));
+  const people = normalizeExpectedPeople(expectedPeople);
   const quantityByKey = {
     water: [people * 2, "병"],
     towel: [people, "개"],

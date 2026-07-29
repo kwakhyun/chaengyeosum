@@ -29,6 +29,7 @@ import {
   ACTIVITY_TYPES,
   getActivityType,
   getSmartPackingRecommendations,
+  normalizeExpectedPeople,
 } from "./smart-packing.mjs";
 import {
   generateSummerEvents,
@@ -40,6 +41,7 @@ import {
 import {
   getForecastWeather,
   getOutingWeather,
+  getRegionalWeatherHighlights,
 } from "./weather.mjs";
 
 const MAX_BODY_BYTES = 32 * 1024;
@@ -99,6 +101,7 @@ export function createApiServer({
   const aiBriefingCache = new Map();
   const aiBriefingUsage = new Map();
   const crowdCache = new Map();
+  const regionalWeatherCache = new Map();
   const summerEventCache = new Map();
   const summerEventUsage = new Map();
 
@@ -392,6 +395,32 @@ export function createApiServer({
         return;
       }
 
+      if (request.method === "GET" && path === "/api/weather-highlights") {
+        const cached = regionalWeatherCache.get("today");
+        if (cached && Date.now() - cached.generatedAt < 30 * 60 * 1000) {
+          json(response, 200, {
+            regions: cached.regions,
+            meta: {
+              ...cached.meta,
+              cached: true,
+            },
+          });
+          return;
+        }
+        const result = weatherEnabled
+          ? await getRegionalWeatherHighlights(fetchImpl)
+          : { regions: [], meta: { generatedAt: Date.now(), date: "" } };
+        regionalWeatherCache.set("today", result);
+        json(response, 200, {
+          ...result,
+          meta: {
+            ...result.meta,
+            cached: false,
+          },
+        });
+        return;
+      }
+
       if (request.method === "GET" && path === "/api/place-search") {
         const places = await searchPlaces(
           url.searchParams.get("q"),
@@ -425,12 +454,8 @@ export function createApiServer({
         const activityType = getActivityType(
           url.searchParams.get("activityType"),
         );
-        const expectedPeople = Math.min(
-          12,
-          Math.max(
-            1,
-            Number(url.searchParams.get("expectedPeople")) || 2,
-          ),
+        const expectedPeople = normalizeExpectedPeople(
+          url.searchParams.get("expectedPeople"),
         );
         if (!place || !validDate(startsAt)) {
           json(response, 400, {
@@ -468,10 +493,7 @@ export function createApiServer({
         const place =
           getPlace(body.placeId) ?? getCustomPlace(body.customPlace);
         const activityType = getActivityType(body.activityType);
-        const expectedPeople = Math.min(
-          12,
-          Math.max(1, Number(body.expectedPeople) || 2),
-        );
+        const expectedPeople = normalizeExpectedPeople(body.expectedPeople);
         if (
           title.length < 2 ||
           creatorName.length < 1 ||

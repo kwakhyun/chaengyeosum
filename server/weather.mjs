@@ -1,5 +1,51 @@
 const CACHE_TTL_MS = 30 * 60 * 1000;
 
+export const WEATHER_REGIONS = [
+  {
+    id: "seoul",
+    name: "서울",
+    spot: "한강",
+    latitude: 37.5283,
+    longitude: 126.9344,
+  },
+  {
+    id: "busan",
+    name: "부산",
+    spot: "광안리",
+    latitude: 35.1532,
+    longitude: 129.1187,
+  },
+  {
+    id: "gangneung",
+    name: "강릉",
+    spot: "경포",
+    latitude: 37.7956,
+    longitude: 128.907,
+  },
+  {
+    id: "jeju",
+    name: "제주",
+    spot: "제주시",
+    latitude: 33.4996,
+    longitude: 126.5312,
+  },
+];
+
+export function getKoreaDateKey(date = new Date()) {
+  const parts = new Intl.DateTimeFormat("en-CA", {
+    timeZone: "Asia/Seoul",
+    year: "numeric",
+    month: "2-digit",
+    day: "2-digit",
+  }).formatToParts(date);
+  const value = Object.fromEntries(
+    parts
+      .filter((part) => part.type !== "literal")
+      .map((part) => [part.type, part.value]),
+  );
+  return `${value.year}-${value.month}-${value.day}`;
+}
+
 function uvLabel(value) {
   if (value >= 8) return "자외선 매우 높음";
   if (value >= 6) return "자외선 높음";
@@ -22,6 +68,7 @@ export async function getForecastWeather(outing, fetchImpl = fetch) {
     longitude: String(outing.longitude),
     daily: [
       "weather_code",
+      "temperature_2m_min",
       "temperature_2m_max",
       "precipitation_probability_max",
       "uv_index_max",
@@ -43,6 +90,7 @@ export async function getForecastWeather(outing, fetchImpl = fetch) {
 
     return {
       date: dateKey,
+      minTemperature: Math.round(data.daily.temperature_2m_min[index]),
       maxTemperature: Math.round(data.daily.temperature_2m_max[index]),
       precipitationProbability: Math.round(
         data.daily.precipitation_probability_max[index] ?? 0,
@@ -55,6 +103,28 @@ export async function getForecastWeather(outing, fetchImpl = fetch) {
   } catch {
     return null;
   }
+}
+
+export async function getRegionalWeatherHighlights(fetchImpl = fetch) {
+  const date = getKoreaDateKey();
+  const regions = await Promise.all(
+    WEATHER_REGIONS.map(async (region) => ({
+      ...region,
+      weather: await getForecastWeather(
+        {
+          id: `weather-${region.id}-${date}`,
+          startsAt: `${date}T12:00:00+09:00`,
+          latitude: region.latitude,
+          longitude: region.longitude,
+        },
+        fetchImpl,
+      ),
+    })),
+  );
+  return {
+    regions: regions.filter((region) => region.weather),
+    meta: { generatedAt: Date.now(), date },
+  };
 }
 
 export async function getOutingWeather(store, outing, fetchImpl = fetch) {

@@ -3,6 +3,7 @@ import { once } from "node:events";
 import test from "node:test";
 
 import { createApiServer } from "./app.mjs";
+import { getKoreaDateKey } from "./weather.mjs";
 
 async function withServer(run, options = {}) {
   const app = createApiServer({
@@ -214,7 +215,7 @@ test("검색한 사용자 장소의 좌표와 이름으로 모임을 만든다",
         },
         startsAt: "2026-08-06T10:00:00+09:00",
         activityType: "trip",
-        expectedPeople: 6,
+        expectedPeople: 25,
         creatorName: "테스터",
         itemKeys: ["water", "battery"],
       }),
@@ -222,13 +223,51 @@ test("검색한 사용자 장소의 좌표와 이름으로 모임을 만든다",
 
     assert.equal(created.outing.outing.placeName, "제주시, 제주특별자치도");
     assert.equal(created.outing.outing.latitude, 33.49962);
-    assert.equal(created.outing.outing.expectedPeople, 6);
+    assert.equal(created.outing.outing.expectedPeople, 25);
     assert.equal(
       created.outing.items.find((item) => item.key === "battery")
         .quantityLabel,
-      "6명 기준 3개",
+      "25명 기준 13개",
     );
   });
+});
+
+test("메인 화면에 네 지역의 오늘 날씨를 제공한다", async () => {
+  const today = getKoreaDateKey();
+  const fetchImpl = async () =>
+    new Response(
+      JSON.stringify({
+        daily: {
+          time: [today],
+          weather_code: [1],
+          temperature_2m_min: [24.1],
+          temperature_2m_max: [32.4],
+          precipitation_probability_max: [20],
+          uv_index_max: [7.2],
+        },
+      }),
+      {
+        status: 200,
+        headers: { "content-type": "application/json" },
+      },
+    );
+
+  await withServer(
+    async (baseUrl) => {
+      const response = await fetch(`${baseUrl}/api/weather-highlights`);
+      assert.equal(response.status, 200);
+      const payload = await response.json();
+      assert.equal(payload.regions.length, 4);
+      assert.deepEqual(
+        payload.regions.map((region) => region.name),
+        ["서울", "부산", "강릉", "제주"],
+      );
+      assert.equal(payload.regions[0].weather.minTemperature, 24);
+      assert.equal(payload.regions[0].weather.maxTemperature, 32);
+      assert.equal(payload.regions[0].weather.uvLabel, "자외선 높음");
+    },
+    { weatherEnabled: true, fetchImpl },
+  );
 });
 
 test("초대 코드나 참여 토큰이 없으면 모임을 읽을 수 없다", async () => {

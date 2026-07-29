@@ -26,6 +26,7 @@ import {
   getActivityType,
   getSmartPackingRecommendations,
   getSuggestedQuantity,
+  normalizeExpectedPeople,
 } from "../server/smart-packing.mjs";
 import {
   generateSummerEvents,
@@ -33,7 +34,11 @@ import {
   SUMMER_EVENT_CACHE_TTL_MS,
   SUMMER_EVENT_DAILY_LIMIT,
 } from "../server/summer-events.mjs";
-import { getForecastWeather } from "../server/weather.mjs";
+import {
+  getForecastWeather,
+  getKoreaDateKey,
+  WEATHER_REGIONS,
+} from "../server/weather.mjs";
 
 const MAX_BODY_BYTES = 32 * 1024;
 const WEATHER_CACHE_TTL_MS = 30 * 60 * 1000;
@@ -355,6 +360,28 @@ async function getOutingWeather(db, outing) {
   } catch {
     return null;
   }
+}
+
+async function getRegionalWeatherHighlights() {
+  const date = getKoreaDateKey();
+  const regions = await Promise.all(
+    WEATHER_REGIONS.map(async (region) => ({
+      ...region,
+      weather: await getForecastWeather({
+        id: `weather-${region.id}-${date}`,
+        startsAt: `${date}T12:00:00+09:00`,
+        latitude: region.latitude,
+        longitude: region.longitude,
+      }),
+    })),
+  );
+  return {
+    regions: regions.filter((region) => region.weather),
+    meta: {
+      generatedAt: Date.now(),
+      date,
+    },
+  };
 }
 
 async function enrichBundle(db, bundle) {
@@ -735,10 +762,7 @@ async function createOuting(request, db) {
   const creatorName = cleanText(body.creatorName, 10);
   const place = getPlace(body.placeId) ?? getCustomPlace(body.customPlace);
   const activityType = getActivityType(body.activityType);
-  const expectedPeople = Math.min(
-    12,
-    Math.max(1, Number(body.expectedPeople) || 2),
-  );
+  const expectedPeople = normalizeExpectedPeople(body.expectedPeople);
   if (
     title.length < 2 ||
     creatorName.length < 1 ||
@@ -1238,6 +1262,7 @@ async function handleRequest(request, env) {
       ok: dbCheck?.ok === 1,
       service: "chaengyeosum-api",
       storage: "cloudflare-d1",
+      features: ["regional-weather", "flexible-group-size"],
     });
   }
   if (request.method === "GET" && path === "/api/places") {
@@ -1271,6 +1296,13 @@ async function handleRequest(request, env) {
       meta: { generatedAt: Date.now() },
     });
   }
+  if (request.method === "GET" && path === "/api/weather-highlights") {
+    return json(
+      request,
+      200,
+      await getRegionalWeatherHighlights(),
+    );
+  }
   if (request.method === "GET" && path === "/api/place-search") {
     return json(request, 200, {
       places: await searchPlaces(url.searchParams.get("q")),
@@ -1298,9 +1330,8 @@ async function handleRequest(request, env) {
     const activityType = getActivityType(
       url.searchParams.get("activityType"),
     );
-    const expectedPeople = Math.min(
-      12,
-      Math.max(1, Number(url.searchParams.get("expectedPeople")) || 2),
+    const expectedPeople = normalizeExpectedPeople(
+      url.searchParams.get("expectedPeople"),
     );
     if (!place || !validDate(startsAt)) {
       return json(request, 400, {

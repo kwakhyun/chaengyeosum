@@ -139,12 +139,22 @@ export interface Outing {
 
 export interface OutingWeather {
   date: string;
+  minTemperature?: number;
   maxTemperature: number;
   precipitationProbability: number;
   uvIndex: number;
   uvLabel: string;
   condition: string;
   source: string;
+}
+
+export interface RegionalWeather {
+  id: string;
+  name: string;
+  spot: string;
+  latitude: number;
+  longitude: number;
+  weather: OutingWeather;
 }
 
 export interface OutingBundle {

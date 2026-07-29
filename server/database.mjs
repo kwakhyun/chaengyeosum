@@ -9,7 +9,10 @@ import { dirname } from "node:path";
 import { DatabaseSync } from "node:sqlite";
 
 import { MAX_ITEMS } from "./item-options.mjs";
-import { getSuggestedQuantity } from "./smart-packing.mjs";
+import {
+  getSuggestedQuantity,
+  normalizeExpectedPeople,
+} from "./smart-packing.mjs";
 
 const AVATAR_KEYS = ["me", "minji", "junho", "seoyeon"];
 
@@ -336,7 +339,7 @@ export function createStore(filename) {
         place.longitude,
         startsAt,
         activityType,
-        Math.min(12, Math.max(1, Number(expectedPeople) || 2)),
+        normalizeExpectedPeople(expectedPeople),
         now,
       );
       statements.insertParticipant.run(

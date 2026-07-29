@@ -52,6 +52,7 @@ import {
   listCrowdHighlights,
   listItemOptions,
   listPlaces,
+  listWeatherHighlights,
   randomizeItems,
   searchSummerEvents,
   searchPlaces,
@@ -67,6 +68,7 @@ import {
   SummerTypeTest,
   type SummerTypeResult,
 } from "./components/SummerTypeTest";
+import { WeatherHighlightsCarousel } from "./components/WeatherHighlightsCarousel";
 import {
   getSavedSessions,
   getSession,
@@ -83,6 +85,7 @@ import type {
   Participant,
   ParticipantSession,
   Place,
+  RegionalWeather,
   SavedSession,
   SmartRecommendation,
   SummerEventSearch,
@@ -438,6 +441,11 @@ function HomePage({
   const [places, setPlaces] = useState<Place[]>([]);
   const [crowdHighlights, setCrowdHighlights] = useState<Place[]>([]);
   const [crowdHighlightsLoading, setCrowdHighlightsLoading] = useState(true);
+  const [weatherHighlights, setWeatherHighlights] = useState<RegionalWeather[]>(
+    [],
+  );
+  const [weatherHighlightsLoading, setWeatherHighlightsLoading] =
+    useState(true);
   const [itemOptions, setItemOptions] = useState<ItemOption[]>([]);
   const [activities, setActivities] = useState<ActivityOption[]>([]);
   const [smartRecommendations, setSmartRecommendations] = useState<
@@ -469,6 +477,7 @@ function HomePage({
     expectedPeople: 4,
     creatorName: "",
   });
+  const [expectedPeopleDraft, setExpectedPeopleDraft] = useState("4");
   const selectedCustomPlaceId = selectedCustomPlace?.id ?? "";
   const selectedCustomPlaceName = selectedCustomPlace?.name ?? "";
   const selectedCustomPlaceLatitude = selectedCustomPlace?.latitude ?? 0;
@@ -505,6 +514,23 @@ function HomePage({
         );
       })
       .catch(() => setError("장소 목록을 불러오지 못했어요."));
+  }, []);
+
+  useEffect(() => {
+    let cancelled = false;
+    listWeatherHighlights()
+      .then((result) => {
+        if (!cancelled) setWeatherHighlights(result.regions);
+      })
+      .catch(() => {
+        // 날씨 카드는 독립 기능이라 실패해도 모임 생성 흐름은 유지해요.
+      })
+      .finally(() => {
+        if (!cancelled) setWeatherHighlightsLoading(false);
+      });
+    return () => {
+      cancelled = true;
+    };
   }, []);
 
   useEffect(() => {
@@ -658,6 +684,14 @@ function HomePage({
   ]);
 
   const itemCount = selectedItemKeys.length + customItems.length;
+  const updateExpectedPeople = (value: number) => {
+    const normalized = Math.min(999, Math.max(1, Math.round(value) || 1));
+    setExpectedPeopleDraft(String(normalized));
+    setForm((current) => ({
+      ...current,
+      expectedPeople: normalized,
+    }));
+  };
   const recommendationReasons = useMemo(
     () =>
       new Map(
@@ -743,7 +777,7 @@ function HomePage({
     const deepLink = `intoss://${APP_NAME}?summerType=${result.key}`;
     const webLink = `${window.location.origin}/?summerType=${result.key}`;
     const message = [
-      `나는 여름 약속에서 ‘${result.name}’!`,
+      `나는 여름 모임에서 ‘${result.name}’!`,
       `시그니처 준비물은 ${result.signatureItem}.`,
       "너는 어떤 타입인지 30초 만에 확인해봐.",
     ].join("\n");
@@ -755,10 +789,21 @@ function HomePage({
         await share({ message: `${message}\n\n${tossLink}` });
         shareResult = "shared";
       } else if (window.navigator.share) {
+        const imageResponse = await fetch(result.image);
+        const imageBlob = await imageResponse.blob();
+        const imageFile = new File(
+          [imageBlob],
+          `chaengyeosum-${result.key}.webp`,
+          { type: imageBlob.type || "image/webp" },
+        );
+        const canShareImage =
+          typeof window.navigator.canShare === "function" &&
+          window.navigator.canShare({ files: [imageFile] });
         await window.navigator.share({
           title: `챙겨썸 | ${result.name}`,
           text: message,
           url: webLink,
+          ...(canShareImage ? { files: [imageFile] } : {}),
         });
         shareResult = "shared";
       } else {
@@ -785,7 +830,7 @@ function HomePage({
         <div className="home-hero__content">
           <div className="brand-pill">챙겨썸</div>
           <h1>
-            이번 여름 약속,
+            이번 여름 모임,
             <br />
             같이 챙겨요
           </h1>
@@ -809,6 +854,10 @@ function HomePage({
           places={crowdHighlights}
           loading={crowdHighlightsLoading}
         />
+        <WeatherHighlightsCarousel
+          regions={weatherHighlights}
+          loading={weatherHighlightsLoading}
+        />
         <SummerTypeTest
           sharedType={sharedSummerType}
           onTrack={track}
@@ -817,7 +866,7 @@ function HomePage({
         <div className="section-title-row">
           <div>
             <p className="eyebrow">MY SUMMER</p>
-            <h2 id="recent-title">내 여름 약속</h2>
+            <h2 id="recent-title">내 여름 모임</h2>
           </div>
           <span>{sessions.length}개</span>
         </div>
@@ -868,7 +917,7 @@ function HomePage({
           <div className="empty-card">
             <CalendarIcon aria-hidden="true" />
             <strong>아직 만든 모임이 없어요</strong>
-            <span>첫 여름 약속을 만들면 여기에 모아드려요.</span>
+            <span>첫 모임을 만들면 여기에 모아드려요.</span>
           </div>
         )}
       </section>
@@ -876,8 +925,8 @@ function HomePage({
       <Sheet
         open={createOpen}
         onClose={() => setCreateOpen(false)}
-        title="새 여름 약속 만들기"
-        description="날짜와 장소를 정하면 함께 챙길 목록이 바로 생겨요."
+        title="새 모임 만들기"
+        description="날짜와 장소를 정하면 함께 챙길 목록을 바로 만들어드려요."
       >
         <form className="create-form" onSubmit={submit}>
           <label>
@@ -928,7 +977,7 @@ function HomePage({
             </label>
           </div>
           <fieldset className="activity-picker">
-            <legend>어떤 여름 약속인가요?</legend>
+            <legend>어떤 모임인가요?</legend>
             <div>
               {activities.map((activity) => (
                 <button
@@ -952,27 +1001,56 @@ function HomePage({
               ))}
             </div>
           </fieldset>
-          <label className="people-count-field">
+          <div className="people-count-field">
             <span>몇 명이 함께 가나요?</span>
-            <select
-              value={form.expectedPeople}
-              onChange={(event) =>
-                setForm((current) => ({
-                  ...current,
-                  expectedPeople: Number(event.target.value),
-                }))
-              }
-            >
-              {Array.from({ length: 11 }, (_, index) => index + 2).map(
-                (count) => (
-                  <option key={count} value={count}>
-                    {count}명
-                  </option>
-                ),
-              )}
-            </select>
+            <div className="people-count-control">
+              <button
+                type="button"
+                aria-label="인원 한 명 줄이기"
+                disabled={form.expectedPeople <= 1}
+                onClick={() => updateExpectedPeople(form.expectedPeople - 1)}
+              >
+                −
+              </button>
+              <label>
+                <input
+                  required
+                  type="number"
+                  inputMode="numeric"
+                  min={1}
+                  max={999}
+                  value={expectedPeopleDraft}
+                  aria-label="함께 가는 인원수"
+                  onChange={(event) => {
+                    const value = event.target.value;
+                    setExpectedPeopleDraft(value);
+                    if (value !== "" && Number.isFinite(Number(value))) {
+                      setForm((current) => ({
+                        ...current,
+                        expectedPeople: Math.min(
+                          999,
+                          Math.max(1, Math.round(Number(value))),
+                        ),
+                      }));
+                    }
+                  }}
+                  onBlur={() =>
+                    updateExpectedPeople(Number(expectedPeopleDraft))
+                  }
+                />
+                <span>명</span>
+              </label>
+              <button
+                type="button"
+                aria-label="인원 한 명 늘리기"
+                disabled={form.expectedPeople >= 999}
+                onClick={() => updateExpectedPeople(form.expectedPeople + 1)}
+              >
+                +
+              </button>
+            </div>
             <small>인원에 맞춰 물·수건·공용 준비물 수량을 계산해요.</small>
-          </label>
+          </div>
           <fieldset className="place-picker">
             <legend>장소</legend>
             <div className="place-picker__tabs">
