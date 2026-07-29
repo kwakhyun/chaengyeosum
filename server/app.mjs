@@ -49,7 +49,8 @@ const MAX_BODY_BYTES = 32 * 1024;
 
 function json(response, status, body) {
   response.writeHead(status, {
-    "access-control-allow-headers": "authorization, content-type",
+    "access-control-allow-headers":
+      "authorization, content-type, x-chaengyeosum-user-key",
     "access-control-allow-methods": "GET, POST, PATCH, DELETE, OPTIONS",
     "access-control-allow-origin": "*",
     "cache-control": "no-store",
@@ -69,6 +70,11 @@ function bearerToken(request) {
   return authorization.startsWith("Bearer ")
     ? authorization.slice("Bearer ".length)
     : "";
+}
+
+function anonymousUserKey(request) {
+  const value = request.headers["x-chaengyeosum-user-key"];
+  return typeof value === "string" && value.length <= 512 ? value : "";
 }
 
 async function readBody(request) {
@@ -132,6 +138,7 @@ export function createApiServer({
   async function getAiBriefing(request, response, outingId) {
     const bundle = store.getOutingBundle(outingId, {
       token: bearerToken(request),
+      anonymousUserKey: anonymousUserKey(request),
     });
     if (bundle.status === "not_found") {
       json(response, 404, { error: "모임을 찾지 못했어요." });
@@ -223,6 +230,7 @@ export function createApiServer({
   async function getPlaceIntelligence(request, response, outingId) {
     const bundle = store.getOutingBundle(outingId, {
       token: bearerToken(request),
+      anonymousUserKey: anonymousUserKey(request),
     });
     if (bundle.status === "not_found") {
       json(response, 404, { error: "모임을 찾지 못했어요." });
@@ -264,6 +272,7 @@ export function createApiServer({
   async function getSummerEvents(request, response, outingId) {
     const bundle = store.getOutingBundle(outingId, {
       token: bearerToken(request),
+      anonymousUserKey: anonymousUserKey(request),
     });
     if (bundle.status === "not_found") {
       json(response, 404, { error: "모임을 찾지 못했어요." });
@@ -562,9 +571,11 @@ export function createApiServer({
           expectedPeople,
           creatorName,
           items,
+          anonymousUserKey: anonymousUserKey(request),
         });
         const bundle = store.getOutingBundle(created.outingId, {
           token: created.session.token,
+          anonymousUserKey: anonymousUserKey(request),
         });
         const enriched = await enrichBundle(bundle);
 
@@ -575,11 +586,26 @@ export function createApiServer({
         return;
       }
 
+      if (request.method === "GET" && path === "/api/me/outings") {
+        const userKey = anonymousUserKey(request);
+        if (!userKey) {
+          json(response, 401, {
+            error: "토스 사용자 식별 정보가 필요해요.",
+          });
+          return;
+        }
+        json(response, 200, {
+          sessions: store.listMySessions(userKey),
+        });
+        return;
+      }
+
       const outingMatch = path.match(/^\/api\/outings\/([^/]+)$/);
       if (request.method === "DELETE" && outingMatch) {
         const result = store.deleteOuting({
           outingId: outingMatch[1],
           token: bearerToken(request),
+          anonymousUserKey: anonymousUserKey(request),
         });
         if (
           result.status === "forbidden" ||
@@ -601,6 +627,7 @@ export function createApiServer({
         const outingId = outingMatch[1];
         const bundle = store.getOutingBundle(outingId, {
           token: bearerToken(request),
+          anonymousUserKey: anonymousUserKey(request),
           inviteCode: url.searchParams.get("invite") ?? "",
         });
         if (bundle.status === "not_found") {
@@ -628,6 +655,7 @@ export function createApiServer({
           outingId: joinMatch[1],
           inviteCode,
           name,
+          anonymousUserKey: anonymousUserKey(request),
         });
         if (!session) {
           json(response, 403, { error: "유효하지 않은 초대 링크예요." });
@@ -635,6 +663,7 @@ export function createApiServer({
         }
         const bundle = store.getOutingBundle(joinMatch[1], {
           token: session.token,
+          anonymousUserKey: anonymousUserKey(request),
         });
         const enriched = await enrichBundle(bundle);
         json(response, 201, {
@@ -681,6 +710,7 @@ export function createApiServer({
           outingId: itemMatch[1],
           itemId: itemMatch[2],
           token: bearerToken(request),
+          anonymousUserKey: anonymousUserKey(request),
           done: typeof body.done === "boolean" ? body.done : undefined,
           ownerId:
             body.ownerId === null || typeof body.ownerId === "string"
@@ -725,6 +755,7 @@ export function createApiServer({
         const result = store.addItem({
           outingId: itemCollectionMatch[1],
           token: bearerToken(request),
+          anonymousUserKey: anonymousUserKey(request),
           item,
         });
         if (result.status === "forbidden") {
@@ -750,6 +781,7 @@ export function createApiServer({
           outingId: itemMatch[1],
           itemId: itemMatch[2],
           token: bearerToken(request),
+          anonymousUserKey: anonymousUserKey(request),
         });
         if (result.status === "forbidden") {
           json(response, 403, { error: "참여자 권한이 필요해요." });
@@ -776,6 +808,7 @@ export function createApiServer({
         const result = store.completeMyItems({
           outingId: completeMatch[1],
           token: bearerToken(request),
+          anonymousUserKey: anonymousUserKey(request),
         });
         if (result.status !== "ok") {
           json(response, 403, { error: "참여자 권한이 필요해요." });
@@ -795,6 +828,7 @@ export function createApiServer({
         const result = store.randomizeUnassigned({
           outingId: randomizeMatch[1],
           token: bearerToken(request),
+          anonymousUserKey: anonymousUserKey(request),
         });
         if (result.status === "forbidden") {
           json(response, 403, { error: "참여자 권한이 필요해요." });
@@ -828,6 +862,7 @@ export function createApiServer({
           outingId: reactionMatch[1],
           eventId: reactionMatch[2],
           token: bearerToken(request),
+          anonymousUserKey: anonymousUserKey(request),
           reactionType: body.reactionType,
         });
         if (result.status === "forbidden") {

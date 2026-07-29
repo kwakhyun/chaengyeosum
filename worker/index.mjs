@@ -61,7 +61,8 @@ export class OpenAiEgress {
 function corsHeaders(request) {
   const origin = request.headers.get("origin");
   return {
-    "access-control-allow-headers": "authorization, content-type",
+    "access-control-allow-headers":
+      "authorization, content-type, x-chaengyeosum-user-key",
     "access-control-allow-methods": "GET, POST, PATCH, DELETE, OPTIONS",
     "access-control-allow-origin": origin || "*",
     "cache-control": "no-store",
@@ -95,6 +96,18 @@ function bearerToken(request) {
   return authorization.startsWith("Bearer ")
     ? authorization.slice("Bearer ".length)
     : "";
+}
+
+function anonymousUserKey(request) {
+  const value = request.headers.get("x-chaengyeosum-user-key") ?? "";
+  return value.length <= 512 ? value : "";
+}
+
+function viewerCredentials(request) {
+  return {
+    token: bearerToken(request),
+    anonymousUserKey: anonymousUserKey(request),
+  };
 }
 
 async function readBody(request) {
@@ -199,15 +212,52 @@ function mapOuting(row) {
   };
 }
 
-async function authorize(db, outingId, token) {
-  if (!token) return null;
-  const hash = await tokenHash(token);
+async function authorize(
+  db,
+  outingId,
+  { token = "", anonymousUserKey: userKey = "" } = {},
+) {
+  if (token) {
+    const participant = await first(
+      db,
+      `SELECT id, outing_id, name, avatar_key, joined_at
+       FROM participants
+       WHERE token_hash = ? AND outing_id = ?`,
+      [await tokenHash(token), outingId],
+    );
+    if (participant) {
+      if (userKey) {
+        const anonymousHash = await tokenHash(userKey);
+        await db
+          .prepare(`
+            UPDATE participants
+            SET anonymous_user_hash = ?
+            WHERE id = ?
+              AND anonymous_user_hash IS NULL
+              AND NOT EXISTS (
+                SELECT 1 FROM participants AS existing
+                WHERE existing.outing_id = ?
+                  AND existing.anonymous_user_hash = ?
+              )
+          `)
+          .bind(
+            anonymousHash,
+            participant.id,
+            outingId,
+            anonymousHash,
+          )
+          .run();
+      }
+      return mapParticipant(participant);
+    }
+  }
+  if (!userKey) return null;
   const participant = await first(
     db,
     `SELECT id, outing_id, name, avatar_key, joined_at
      FROM participants
-     WHERE token_hash = ? AND outing_id = ?`,
-    [hash, outingId],
+     WHERE anonymous_user_hash = ? AND outing_id = ?`,
+    [await tokenHash(userKey), outingId],
   );
   return mapParticipant(participant);
 }
@@ -215,7 +265,7 @@ async function authorize(db, outingId, token) {
 async function getOutingBundle(
   db,
   outingId,
-  { token, inviteCode } = {},
+  { token, inviteCode, anonymousUserKey: userKey } = {},
 ) {
   const outingRow = await first(
     db,
@@ -224,7 +274,10 @@ async function getOutingBundle(
   );
   if (!outingRow) return { status: "not_found" };
 
-  const viewer = await authorize(db, outingId, token);
+  const viewer = await authorize(db, outingId, {
+    token,
+    anonymousUserKey: userKey,
+  });
   if (!viewer && outingRow.invite_code !== inviteCode) {
     return { status: "forbidden" };
   }
@@ -432,8 +485,11 @@ function openAiFetch(env) {
 }
 
 async function getAiBriefing(request, env, db, outingId) {
-  const token = bearerToken(request);
-  const bundle = await getOutingBundle(db, outingId, { token });
+  const bundle = await getOutingBundle(
+    db,
+    outingId,
+    viewerCredentials(request),
+  );
   if (bundle.status === "not_found") {
     return json(request, 404, { error: "모임을 찾지 못했어요." });
   }
@@ -609,9 +665,11 @@ async function getCrowdForPlace(env, db, place) {
 }
 
 async function getPlaceIntelligence(request, env, db, outingId) {
-  const bundle = await getOutingBundle(db, outingId, {
-    token: bearerToken(request),
-  });
+  const bundle = await getOutingBundle(
+    db,
+    outingId,
+    viewerCredentials(request),
+  );
   if (bundle.status === "not_found") {
     return json(request, 404, { error: "모임을 찾지 못했어요." });
   }
@@ -625,9 +683,11 @@ async function getPlaceIntelligence(request, env, db, outingId) {
 }
 
 async function getSummerEvents(request, env, db, outingId) {
-  const bundle = await getOutingBundle(db, outingId, {
-    token: bearerToken(request),
-  });
+  const bundle = await getOutingBundle(
+    db,
+    outingId,
+    viewerCredentials(request),
+  );
   if (bundle.status === "not_found") {
     return json(request, 404, { error: "모임을 찾지 못했어요." });
   }
@@ -786,6 +846,8 @@ async function createOuting(request, db) {
   const participantId = opaqueId("pt");
   const token = randomToken();
   const inviteCode = randomToken(7);
+  const userKey = anonymousUserKey(request);
+  const anonymousUserHash = userKey ? await tokenHash(userKey) : null;
   const now = new Date().toISOString();
   const statements = [
     db
@@ -812,8 +874,9 @@ async function createOuting(request, db) {
     db
       .prepare(`
         INSERT INTO participants (
-          id, outing_id, name, avatar_key, token_hash, joined_at
-        ) VALUES (?, ?, ?, ?, ?, ?)
+          id, outing_id, name, avatar_key, token_hash,
+          anonymous_user_hash, joined_at
+        ) VALUES (?, ?, ?, ?, ?, ?, ?)
       `)
       .bind(
         participantId,
@@ -821,6 +884,7 @@ async function createOuting(request, db) {
         creatorName,
         "me",
         await tokenHash(token),
+        anonymousUserHash,
         now,
       ),
   ];
@@ -852,7 +916,10 @@ async function createOuting(request, db) {
   );
   await db.batch(statements);
 
-  const bundle = await getOutingBundle(db, outingId, { token });
+  const bundle = await getOutingBundle(db, outingId, {
+    token,
+    anonymousUserKey: userKey,
+  });
   return json(request, 201, {
     session: { participantId, token },
     outing: await enrichBundle(db, bundle),
@@ -876,6 +943,26 @@ async function joinOuting(request, db, outingId) {
     return json(request, 403, { error: "유효하지 않은 초대 링크예요." });
   }
 
+  const userKey = anonymousUserKey(request);
+  const anonymousUserHash = userKey ? await tokenHash(userKey) : null;
+  if (anonymousUserHash) {
+    const existing = await first(
+      db,
+      `SELECT id FROM participants
+       WHERE outing_id = ? AND anonymous_user_hash = ?`,
+      [outingId, anonymousUserHash],
+    );
+    if (existing) {
+      const bundle = await getOutingBundle(db, outingId, {
+        anonymousUserKey: userKey,
+      });
+      return json(request, 200, {
+        session: { participantId: existing.id, token: "" },
+        outing: await enrichBundle(db, bundle),
+      });
+    }
+  }
+
   const countRow = await first(
     db,
     "SELECT COUNT(*) AS count FROM participants WHERE outing_id = ?",
@@ -889,8 +976,9 @@ async function joinOuting(request, db, outingId) {
     db
       .prepare(`
         INSERT INTO participants (
-          id, outing_id, name, avatar_key, token_hash, joined_at
-        ) VALUES (?, ?, ?, ?, ?, ?)
+          id, outing_id, name, avatar_key, token_hash,
+          anonymous_user_hash, joined_at
+        ) VALUES (?, ?, ?, ?, ?, ?, ?)
       `)
       .bind(
         participantId,
@@ -898,12 +986,16 @@ async function joinOuting(request, db, outingId) {
         name,
         avatarKey,
         await tokenHash(token),
+        anonymousUserHash,
         now,
       ),
     eventStatement(db, outingId, participantId, "joined"),
   ]);
 
-  const bundle = await getOutingBundle(db, outingId, { token });
+  const bundle = await getOutingBundle(db, outingId, {
+    token,
+    anonymousUserKey: userKey,
+  });
   return json(request, 201, {
     session: { participantId, token },
     outing: await enrichBundle(db, bundle),
@@ -911,7 +1003,7 @@ async function joinOuting(request, db, outingId) {
 }
 
 async function updateItem(request, db, outingId, itemId) {
-  const viewer = await authorize(db, outingId, bearerToken(request));
+  const viewer = await authorize(db, outingId, viewerCredentials(request));
   if (!viewer) {
     return json(request, 403, { error: "참여자 권한이 필요해요." });
   }
@@ -976,7 +1068,7 @@ async function updateItem(request, db, outingId, itemId) {
 }
 
 async function addItem(request, db, outingId) {
-  const viewer = await authorize(db, outingId, bearerToken(request));
+  const viewer = await authorize(db, outingId, viewerCredentials(request));
   if (!viewer) {
     return json(request, 403, { error: "참여자 권한이 필요해요." });
   }
@@ -1052,7 +1144,7 @@ async function addItem(request, db, outingId) {
 }
 
 async function deleteItem(request, db, outingId, itemId) {
-  const viewer = await authorize(db, outingId, bearerToken(request));
+  const viewer = await authorize(db, outingId, viewerCredentials(request));
   if (!viewer) {
     return json(request, 403, { error: "참여자 권한이 필요해요." });
   }
@@ -1088,7 +1180,7 @@ async function deleteItem(request, db, outingId, itemId) {
 }
 
 async function deleteOuting(request, db, outingId) {
-  const viewer = await authorize(db, outingId, bearerToken(request));
+  const viewer = await authorize(db, outingId, viewerCredentials(request));
   if (!viewer) {
     return json(request, 403, {
       error: "모임을 만든 사람만 삭제할 수 있어요.",
@@ -1118,7 +1210,7 @@ async function deleteOuting(request, db, outingId) {
 }
 
 async function completeMine(request, db, outingId) {
-  const viewer = await authorize(db, outingId, bearerToken(request));
+  const viewer = await authorize(db, outingId, viewerCredentials(request));
   if (!viewer) {
     return json(request, 403, { error: "참여자 권한이 필요해요." });
   }
@@ -1142,7 +1234,7 @@ async function completeMine(request, db, outingId) {
 }
 
 async function randomizeItems(request, db, outingId) {
-  const viewer = await authorize(db, outingId, bearerToken(request));
+  const viewer = await authorize(db, outingId, viewerCredentials(request));
   if (!viewer) {
     return json(request, 403, { error: "참여자 권한이 필요해요." });
   }
@@ -1219,7 +1311,7 @@ async function randomizeItems(request, db, outingId) {
 }
 
 async function toggleReaction(request, db, outingId, eventId) {
-  const viewer = await authorize(db, outingId, bearerToken(request));
+  const viewer = await authorize(db, outingId, viewerCredentials(request));
   if (!viewer) {
     return json(request, 403, { error: "참여자 권한이 필요해요." });
   }
@@ -1269,6 +1361,42 @@ async function toggleReaction(request, db, outingId, eventId) {
   return json(request, 200, {
     ok: true,
     reaction: body.reactionType,
+  });
+}
+
+async function listMySessions(request, db) {
+  const userKey = anonymousUserKey(request);
+  if (!userKey) {
+    return json(request, 401, {
+      error: "토스 사용자 식별 정보가 필요해요.",
+    });
+  }
+  const rows = await all(
+    db,
+    `SELECT
+       participants.id AS participant_id,
+       outings.id AS outing_id,
+       outings.title,
+       outings.place_name,
+       outings.starts_at,
+       outings.activity_type
+     FROM participants
+     JOIN outings ON outings.id = participants.outing_id
+     WHERE participants.anonymous_user_hash = ?
+     ORDER BY outings.created_at DESC
+     LIMIT 20`,
+    [await tokenHash(userKey)],
+  );
+  return json(request, 200, {
+    sessions: rows.map((row) => ({
+      participantId: row.participant_id,
+      token: "",
+      outingId: row.outing_id,
+      title: row.title,
+      placeName: row.place_name,
+      startsAt: row.starts_at,
+      activityType: row.activity_type,
+    })),
   });
 }
 
@@ -1420,6 +1548,9 @@ async function handleRequest(request, env) {
   if (request.method === "POST" && path === "/api/outings") {
     return createOuting(request, db);
   }
+  if (request.method === "GET" && path === "/api/me/outings") {
+    return listMySessions(request, db);
+  }
 
   const outingMatch = path.match(/^\/api\/outings\/([^/]+)$/);
   if (request.method === "DELETE" && outingMatch) {
@@ -1427,7 +1558,7 @@ async function handleRequest(request, env) {
   }
   if (request.method === "GET" && outingMatch) {
     const bundle = await getOutingBundle(db, outingMatch[1], {
-      token: bearerToken(request),
+      ...viewerCredentials(request),
       inviteCode: url.searchParams.get("invite") ?? "",
     });
     if (bundle.status === "not_found") {

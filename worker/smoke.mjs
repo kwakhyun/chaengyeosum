@@ -16,9 +16,13 @@ async function request(path, options = {}) {
 const health = await request("/api/health");
 assert.equal(health.storage, "cloudflare-d1");
 
+const anonymousUserKey = `worker-smoke-${Date.now()}`;
 const created = await request("/api/outings", {
   method: "POST",
-  headers: { "content-type": "application/json" },
+  headers: {
+    "content-type": "application/json",
+    "x-chaengyeosum-user-key": anonymousUserKey,
+  },
   body: JSON.stringify({
     title: "Cloudflare 배포 검증",
     placeId: "custom:33.49962:126.53119",
@@ -39,6 +43,16 @@ assert.equal(created.outing.outing.expectedPeople, 6);
 assert.equal(
   created.outing.items.find((item) => item.key === "water").quantityLabel,
   "6명 기준 12병",
+);
+
+const recovered = await request("/api/me/outings", {
+  headers: { "x-chaengyeosum-user-key": anonymousUserKey },
+});
+assert.equal(
+  recovered.sessions.some(
+    (session) => session.outingId === created.outing.outing.id,
+  ),
+  true,
 );
 
 const outingId = created.outing.outing.id;

@@ -8,9 +8,11 @@ import type {
   Place,
   PlaceIntelligenceResponse,
   RegionalWeather,
+  SavedSession,
   SmartRecommendation,
   SummerEventResponse,
 } from "./types";
+import { getActiveAnonymousUserKey } from "./anonymous-user";
 
 const DEFAULT_PRODUCTION_API =
   "https://chaengyeosum-api.kwakhyun-miniapps.workers.dev/api";
@@ -24,11 +26,15 @@ async function request<T>(
   options: RequestInit = {},
   token?: string,
 ): Promise<T> {
+  const anonymousUserKey = getActiveAnonymousUserKey();
   const response = await fetch(`${API_BASE}${path}`, {
     ...options,
     headers: {
       ...(options.body ? { "content-type": "application/json" } : {}),
       ...(token ? { authorization: `Bearer ${token}` } : {}),
+      ...(anonymousUserKey
+        ? { "x-chaengyeosum-user-key": anonymousUserKey }
+        : {}),
       ...options.headers,
     },
   });
@@ -40,6 +46,10 @@ async function request<T>(
     throw new Error(payload.error ?? "요청을 처리하지 못했어요.");
   }
   return payload as T;
+}
+
+export function listMySessions() {
+  return request<{ sessions: SavedSession[] }>("/me/outings");
 }
 
 export function listPlaces() {

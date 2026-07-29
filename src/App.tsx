@@ -56,6 +56,7 @@ import {
   getPackingRecommendations,
   getOuting,
   joinOuting,
+  listMySessions,
   listCrowdHighlights,
   listItemOptions,
   listPlaces,
@@ -66,6 +67,7 @@ import {
   toggleEventReaction,
   updateItem,
 } from "./api";
+import { initializeAnonymousUser } from "./anonymous-user";
 import { AiBriefingCard } from "./components/AiBriefingCard";
 import { CrowdHighlightsCarousel } from "./components/CrowdHighlightsCarousel";
 import { PlaceIntelligenceCard } from "./components/PlaceIntelligenceCard";
@@ -83,7 +85,9 @@ import { WeatherHighlightsCarousel } from "./components/WeatherHighlightsCarouse
 import {
   getSavedSessions,
   getSession,
+  mergeSessions,
   removeSession,
+  replaceSessions,
   saveSession,
 } from "./session";
 import type {
@@ -600,6 +604,20 @@ type OutingSummary = {
 
 export default function App() {
   const [outingId, setOutingId] = useState(currentOutingId);
+  const [anonymousUser, setAnonymousUser] = useState<{
+    key: string;
+    canLinkLocalSessions: boolean;
+  } | null>(null);
+
+  useEffect(() => {
+    let cancelled = false;
+    void initializeAnonymousUser().then((identity) => {
+      if (!cancelled) setAnonymousUser(identity);
+    });
+    return () => {
+      cancelled = true;
+    };
+  }, []);
 
   useEffect(() => {
     const handlePopState = () => setOutingId(currentOutingId());
@@ -635,13 +653,21 @@ export default function App() {
   return outingId ? (
     <OutingPage outingId={outingId} onHome={() => navigate("/")} />
   ) : (
-    <HomePage onOpenOuting={(id) => navigate(`/outing/${id}`)} />
+    <HomePage
+      anonymousUser={anonymousUser}
+      onOpenOuting={(id) => navigate(`/outing/${id}`)}
+    />
   );
 }
 
 function HomePage({
+  anonymousUser,
   onOpenOuting,
 }: {
+  anonymousUser: {
+    key: string;
+    canLinkLocalSessions: boolean;
+  } | null;
   onOpenOuting: (outingId: string) => void;
 }) {
   const [createOpen, setCreateOpen] = useState(false);
@@ -728,6 +754,34 @@ function HomePage({
       return place?.currentCrowd ? [place] : [];
     });
   }, [crowdHighlights, places]);
+
+  useEffect(() => {
+    if (!anonymousUser) return;
+    let cancelled = false;
+    const localSessions = anonymousUser.canLinkLocalSessions
+      ? getSavedSessions()
+      : [];
+    Promise.allSettled(
+      localSessions.map((session) =>
+        getOuting(session.outingId, { token: session.token }),
+      ),
+    )
+      .then(() => listMySessions())
+      .then((result) => {
+        if (cancelled) return;
+        setSessions(
+          anonymousUser.canLinkLocalSessions
+            ? mergeSessions(result.sessions)
+            : replaceSessions(result.sessions),
+        );
+      })
+      .catch(() => {
+        // 식별키 동기화가 실패해도 기존 로컬 세션으로 계속 이용해요.
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [anonymousUser]);
 
   useEffect(() => {
     Promise.all([listPlaces(), listItemOptions()])

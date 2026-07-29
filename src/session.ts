@@ -21,6 +21,23 @@ export function getSession(outingId: string) {
   return loadAll().find((session) => session.outingId === outingId) ?? null;
 }
 
+export function mergeSessions(recovered: SavedSession[]) {
+  const current = loadAll();
+  const recoveredIds = new Set(recovered.map((session) => session.outingId));
+  const merged = [
+    ...recovered,
+    ...current.filter((session) => !recoveredIds.has(session.outingId)),
+  ].slice(0, 20);
+  window.localStorage.setItem(STORAGE_KEY, JSON.stringify(merged));
+  return merged;
+}
+
+export function replaceSessions(recovered: SavedSession[]) {
+  const next = recovered.slice(0, 20);
+  window.localStorage.setItem(STORAGE_KEY, JSON.stringify(next));
+  return next;
+}
+
 export function saveSession(session: ParticipantSession, outing: Outing) {
   const next: SavedSession = {
     ...session,
@@ -35,7 +52,7 @@ export function saveSession(session: ParticipantSession, outing: Outing) {
   );
   window.localStorage.setItem(
     STORAGE_KEY,
-    JSON.stringify([next, ...sessions].slice(0, 8)),
+    JSON.stringify([next, ...sessions].slice(0, 20)),
   );
 }
 

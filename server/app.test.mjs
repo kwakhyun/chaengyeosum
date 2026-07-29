@@ -199,6 +199,95 @@ test("모임 생성, 초대 참여, 공동 체크 상태가 API에 저장된다"
   });
 });
 
+test("토스 익명 식별키로 내 모임을 복구하고 참여자 권한을 유지한다", async () => {
+  await withServer(async (baseUrl) => {
+    const anonymousHeaders = {
+      "content-type": "application/json",
+      "x-chaengyeosum-user-key": "toss-anonymous-user-test-001",
+    };
+    const createdResponse = await fetch(`${baseUrl}/api/outings`, {
+      method: "POST",
+      headers: anonymousHeaders,
+      body: JSON.stringify({
+        title: "익명키 복구 모임",
+        placeId: "seoul-forest",
+        startsAt: "2026-08-10T10:00:00+09:00",
+        activityType: "picnic",
+        expectedPeople: 3,
+        creatorName: "익명사용자",
+        itemKeys: ["water", "mat"],
+      }),
+    });
+    assert.equal(createdResponse.status, 201);
+    const created = await createdResponse.json();
+
+    const recoveredResponse = await fetch(`${baseUrl}/api/me/outings`, {
+      headers: {
+        "x-chaengyeosum-user-key": "toss-anonymous-user-test-001",
+      },
+    });
+    assert.equal(recoveredResponse.status, 200);
+    const recovered = await recoveredResponse.json();
+    assert.equal(recovered.sessions.length, 1);
+    assert.equal(recovered.sessions[0].outingId, created.outing.outing.id);
+    assert.equal(recovered.sessions[0].token, "");
+
+    const outingResponse = await fetch(
+      `${baseUrl}/api/outings/${created.outing.outing.id}`,
+      {
+        headers: {
+          "x-chaengyeosum-user-key": "toss-anonymous-user-test-001",
+        },
+      },
+    );
+    assert.equal(outingResponse.status, 200);
+    const outing = await outingResponse.json();
+    assert.equal(outing.viewer.id, created.session.participantId);
+    assert.equal(outing.canDelete, true);
+
+    const updateResponse = await fetch(
+      `${baseUrl}/api/outings/${created.outing.outing.id}/items/${outing.items[0].id}`,
+      {
+        method: "PATCH",
+        headers: anonymousHeaders,
+        body: JSON.stringify({ done: true }),
+      },
+    );
+    assert.equal(updateResponse.status, 200);
+
+    const legacyCreated = await fetch(`${baseUrl}/api/outings`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        title: "기존 세션 연결 모임",
+        placeId: "yeouido-hangang",
+        startsAt: "2026-08-11T10:00:00+09:00",
+        activityType: "picnic",
+        expectedPeople: 2,
+        creatorName: "기존사용자",
+        itemKeys: ["water"],
+      }),
+    }).then((response) => response.json());
+    const linkResponse = await fetch(
+      `${baseUrl}/api/outings/${legacyCreated.outing.outing.id}`,
+      {
+        headers: {
+          authorization: `Bearer ${legacyCreated.session.token}`,
+          "x-chaengyeosum-user-key": "toss-anonymous-user-test-001",
+        },
+      },
+    );
+    assert.equal(linkResponse.status, 200);
+
+    const linkedSessions = await fetch(`${baseUrl}/api/me/outings`, {
+      headers: {
+        "x-chaengyeosum-user-key": "toss-anonymous-user-test-001",
+      },
+    }).then((response) => response.json());
+    assert.equal(linkedSessions.sessions.length, 2);
+  });
+});
+
 test("검색한 사용자 장소의 좌표와 이름으로 모임을 만든다", async () => {
   await withServer(async (baseUrl) => {
     const created = await fetch(`${baseUrl}/api/outings`, {

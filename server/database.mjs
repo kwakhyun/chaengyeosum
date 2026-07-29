@@ -64,6 +64,7 @@ export function createStore(filename) {
       name TEXT NOT NULL,
       avatar_key TEXT NOT NULL,
       token_hash TEXT NOT NULL UNIQUE,
+      anonymous_user_hash TEXT,
       joined_at TEXT NOT NULL
     );
 
@@ -125,6 +126,19 @@ export function createStore(filename) {
       "ALTER TABLE outings ADD COLUMN expected_people INTEGER NOT NULL DEFAULT 2",
     );
   }
+  const participantColumns = db.prepare("PRAGMA table_info(participants)").all();
+  if (
+    !participantColumns.some(
+      (column) => column.name === "anonymous_user_hash",
+    )
+  ) {
+    db.exec("ALTER TABLE participants ADD COLUMN anonymous_user_hash TEXT");
+  }
+  db.exec(`
+    CREATE UNIQUE INDEX IF NOT EXISTS participants_outing_anonymous_idx
+      ON participants(outing_id, anonymous_user_hash)
+      WHERE anonymous_user_hash IS NOT NULL
+  `);
 
   const statements = {
     insertOuting: db.prepare(`
@@ -135,8 +149,9 @@ export function createStore(filename) {
     `),
     insertParticipant: db.prepare(`
       INSERT INTO participants (
-        id, outing_id, name, avatar_key, token_hash, joined_at
-      ) VALUES (?, ?, ?, ?, ?, ?)
+        id, outing_id, name, avatar_key, token_hash,
+        anonymous_user_hash, joined_at
+      ) VALUES (?, ?, ?, ?, ?, ?, ?)
     `),
     insertItem: db.prepare(`
       INSERT INTO checklist_items (
@@ -210,6 +225,36 @@ export function createStore(filename) {
       SELECT id, outing_id, name, avatar_key, joined_at
       FROM participants
       WHERE token_hash = ?
+    `),
+    getParticipantByAnonymousUser: db.prepare(`
+      SELECT id, outing_id, name, avatar_key, joined_at
+      FROM participants
+      WHERE anonymous_user_hash = ? AND outing_id = ?
+    `),
+    getSessionsByAnonymousUser: db.prepare(`
+      SELECT
+        participants.id AS participant_id,
+        outings.id AS outing_id,
+        outings.title,
+        outings.place_name,
+        outings.starts_at,
+        outings.activity_type
+      FROM participants
+      JOIN outings ON outings.id = participants.outing_id
+      WHERE participants.anonymous_user_hash = ?
+      ORDER BY outings.created_at DESC
+      LIMIT 20
+    `),
+    linkAnonymousUser: db.prepare(`
+      UPDATE participants
+      SET anonymous_user_hash = ?
+      WHERE id = ?
+        AND anonymous_user_hash IS NULL
+        AND NOT EXISTS (
+          SELECT 1 FROM participants AS existing
+          WHERE existing.outing_id = ?
+            AND existing.anonymous_user_hash = ?
+        )
     `),
     getParticipant: db.prepare(`
       SELECT id, outing_id, name, avatar_key, joined_at
@@ -308,11 +353,46 @@ export function createStore(filename) {
     );
   }
 
-  function authorize(outingId, token) {
-    if (!token) return null;
-    const participant = statements.getParticipantByToken.get(tokenHash(token));
-    if (!participant || participant.outing_id !== outingId) return null;
-    return mapParticipant(participant);
+  function authorize(outingId, token, anonymousUserKey = "") {
+    if (token) {
+      const participant = statements.getParticipantByToken.get(
+        tokenHash(token),
+      );
+      if (participant?.outing_id === outingId) {
+        if (anonymousUserKey) {
+          const anonymousHash = tokenHash(anonymousUserKey);
+          statements.linkAnonymousUser.run(
+            anonymousHash,
+            participant.id,
+            outingId,
+            anonymousHash,
+          );
+        }
+        return mapParticipant(participant);
+      }
+    }
+    if (!anonymousUserKey) return null;
+    return mapParticipant(
+      statements.getParticipantByAnonymousUser.get(
+        tokenHash(anonymousUserKey),
+        outingId,
+      ),
+    );
+  }
+
+  function listMySessions(anonymousUserKey) {
+    if (!anonymousUserKey) return [];
+    return statements.getSessionsByAnonymousUser
+      .all(tokenHash(anonymousUserKey))
+      .map((row) => ({
+        participantId: row.participant_id,
+        token: "",
+        outingId: row.outing_id,
+        title: row.title,
+        placeName: row.place_name,
+        startsAt: row.starts_at,
+        activityType: row.activity_type,
+      }));
   }
 
   function createOuting({
@@ -323,6 +403,7 @@ export function createStore(filename) {
     expectedPeople,
     creatorName,
     items,
+    anonymousUserKey = "",
   }) {
     const outingId = createOpaqueId("out");
     const participantId = createOpaqueId("pt");
@@ -351,6 +432,7 @@ export function createStore(filename) {
         creatorName,
         "me",
         tokenHash(token),
+        anonymousUserKey ? tokenHash(anonymousUserKey) : null,
         now,
       );
       items.forEach((item, index) => {
@@ -378,9 +460,27 @@ export function createStore(filename) {
     };
   }
 
-  function joinOuting({ outingId, inviteCode, name }) {
+  function joinOuting({
+    outingId,
+    inviteCode,
+    name,
+    anonymousUserKey = "",
+  }) {
     const outing = statements.getOuting.get(outingId);
     if (!outing || outing.invite_code !== inviteCode) return null;
+
+    const anonymousHash = anonymousUserKey
+      ? tokenHash(anonymousUserKey)
+      : null;
+    if (anonymousHash) {
+      const existing = statements.getParticipantByAnonymousUser.get(
+        anonymousHash,
+        outingId,
+      );
+      if (existing) {
+        return { participantId: existing.id, token: "" };
+      }
+    }
 
     const count = Number(statements.participantCount.get(outingId).count);
     const participantId = createOpaqueId("pt");
@@ -394,6 +494,7 @@ export function createStore(filename) {
       name,
       avatarKey,
       tokenHash(token),
+      anonymousHash,
       now,
     );
     addEvent(outingId, participantId, "joined");
@@ -401,11 +502,14 @@ export function createStore(filename) {
     return { participantId, token };
   }
 
-  function getOutingBundle(outingId, { token, inviteCode } = {}) {
+  function getOutingBundle(
+    outingId,
+    { token, inviteCode, anonymousUserKey } = {},
+  ) {
     const outingRow = statements.getOuting.get(outingId);
     if (!outingRow) return { status: "not_found" };
 
-    const viewer = authorize(outingId, token);
+    const viewer = authorize(outingId, token, anonymousUserKey);
     if (!viewer && outingRow.invite_code !== inviteCode) {
       return { status: "forbidden" };
     }
@@ -478,8 +582,15 @@ export function createStore(filename) {
     };
   }
 
-  function updateItem({ outingId, itemId, token, done, ownerId }) {
-    const viewer = authorize(outingId, token);
+  function updateItem({
+    outingId,
+    itemId,
+    token,
+    anonymousUserKey,
+    done,
+    ownerId,
+  }) {
+    const viewer = authorize(outingId, token, anonymousUserKey);
     if (!viewer) return { status: "forbidden" };
     const item = statements.getItem.get(itemId, outingId);
     if (!item) return { status: "not_found" };
@@ -510,8 +621,8 @@ export function createStore(filename) {
     return { status: "ok" };
   }
 
-  function completeMyItems({ outingId, token }) {
-    const viewer = authorize(outingId, token);
+  function completeMyItems({ outingId, token, anonymousUserKey }) {
+    const viewer = authorize(outingId, token, anonymousUserKey);
     if (!viewer) return { status: "forbidden" };
     const result = statements.completeMine.run(outingId, viewer.id);
     if (Number(result.changes) > 0) {
@@ -520,8 +631,8 @@ export function createStore(filename) {
     return { status: "ok", completed: Number(result.changes) };
   }
 
-  function addItem({ outingId, token, item }) {
-    const viewer = authorize(outingId, token);
+  function addItem({ outingId, token, anonymousUserKey, item }) {
+    const viewer = authorize(outingId, token, anonymousUserKey);
     if (!viewer) return { status: "forbidden" };
     if (Number(statements.itemCount.get(outingId).count) >= MAX_ITEMS) {
       return { status: "max_items" };
@@ -550,8 +661,8 @@ export function createStore(filename) {
     return { status: "ok", itemId };
   }
 
-  function deleteItem({ outingId, itemId, token }) {
-    const viewer = authorize(outingId, token);
+  function deleteItem({ outingId, itemId, token, anonymousUserKey }) {
+    const viewer = authorize(outingId, token, anonymousUserKey);
     if (!viewer) return { status: "forbidden" };
     const item = statements.getItem.get(itemId, outingId);
     if (!item) return { status: "not_found" };
@@ -567,8 +678,8 @@ export function createStore(filename) {
       : { status: "not_found" };
   }
 
-  function deleteOuting({ outingId, token }) {
-    const viewer = authorize(outingId, token);
+  function deleteOuting({ outingId, token, anonymousUserKey }) {
+    const viewer = authorize(outingId, token, anonymousUserKey);
     if (!viewer) return { status: "forbidden" };
     const creator = statements.getParticipants.get(outingId);
     if (!creator || creator.id !== viewer.id) {
@@ -580,8 +691,8 @@ export function createStore(filename) {
       : { status: "not_found" };
   }
 
-  function randomizeUnassigned({ outingId, token }) {
-    const viewer = authorize(outingId, token);
+  function randomizeUnassigned({ outingId, token, anonymousUserKey }) {
+    const viewer = authorize(outingId, token, anonymousUserKey);
     if (!viewer) return { status: "forbidden" };
     const participants = statements
       .getParticipants
@@ -639,9 +750,10 @@ export function createStore(filename) {
     outingId,
     eventId,
     token,
+    anonymousUserKey,
     reactionType,
   }) {
-    const viewer = authorize(outingId, token);
+    const viewer = authorize(outingId, token, anonymousUserKey);
     if (!viewer) return { status: "forbidden" };
     if (!statements.getEvent.get(eventId, outingId)) {
       return { status: "not_found" };
@@ -692,6 +804,7 @@ export function createStore(filename) {
     getOutingBundle,
     getWeatherCache,
     joinOuting,
+    listMySessions,
     putWeatherCache,
     randomizeUnassigned,
     toggleEventReaction,
