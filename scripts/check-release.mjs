@@ -66,6 +66,20 @@ const checks = [
       ),
   },
   {
+    name: "Android WebView 하단 안전영역 중복 적용 없음",
+    pass:
+      !styles.includes("env(safe-area-inset-bottom)") &&
+      styles.includes("padding: 14px 2px 24px") &&
+      styles.includes("padding: 24px 20px"),
+  },
+  {
+    name: "홈 히어로가 강과 피크닉 중심으로 압축",
+    pass:
+      styles.includes("min-height: 360px") &&
+      styles.includes("height: 118%") &&
+      styles.includes("object-position: center bottom"),
+  },
+  {
     name: "앱인토스 네이티브 뒤로가기 처리",
     pass:
       app.includes('graniteEvent.addEventListener("backEvent"') &&
