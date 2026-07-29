@@ -17,7 +17,9 @@ import {
   CopyIcon,
   Cross2Icon,
   DashboardIcon,
+  GlobeIcon,
   HeartIcon,
+  HomeIcon,
   LayersIcon,
   LightningBoltIcon,
   MagicWandIcon,
@@ -417,6 +419,75 @@ function currentOutingId() {
   return window.location.pathname.match(/^\/outing\/([^/]+)$/)?.[1] ?? null;
 }
 
+type HomeTab = "home" | "places" | "type" | "outings";
+
+function OutingList({
+  sessions,
+  summaries,
+  onOpenOuting,
+}: {
+  sessions: SavedSession[];
+  summaries: Map<
+    string,
+    { ready: number; total: number; unassigned: number }
+  >;
+  onOpenOuting: (outingId: string) => void;
+}) {
+  if (sessions.length === 0) {
+    return (
+      <div className="empty-card">
+        <CalendarIcon aria-hidden="true" />
+        <strong>아직 만든 모임이 없어요</strong>
+        <span>첫 모임을 만들면 여기에 모아드려요.</span>
+      </div>
+    );
+  }
+
+  return (
+    <div className="outing-cards">
+      {sessions.map((session) => {
+        const summary = summaries.get(session.outingId);
+        const percent =
+          summary && summary.total > 0
+            ? Math.round((summary.ready / summary.total) * 100)
+            : 0;
+        return (
+          <button
+            className="outing-card"
+            type="button"
+            key={session.outingId}
+            onClick={() => onOpenOuting(session.outingId)}
+          >
+            <span className="outing-card__icon">
+              <CalendarIcon aria-hidden="true" />
+            </span>
+            <span className="outing-card__copy">
+              <strong>{session.title}</strong>
+              <span>
+                {formatDateLabel(session.startsAt)} · {session.placeName}
+              </span>
+              {summary ? (
+                <span className="outing-card__status">
+                  <i aria-hidden="true">
+                    <i style={{ width: `${percent}%` }} />
+                  </i>
+                  <b>
+                    {summary.ready}/{summary.total} 준비
+                    {summary.unassigned > 0
+                      ? ` · ${summary.unassigned}개 주인 찾는 중`
+                      : ""}
+                  </b>
+                </span>
+              ) : null}
+            </span>
+            <ChevronRightIcon aria-hidden="true" />
+          </button>
+        );
+      })}
+    </div>
+  );
+}
+
 export default function App() {
   const [outingId, setOutingId] = useState(currentOutingId);
 
@@ -489,6 +560,9 @@ function HomePage({
   const sharedSummerType = isSummerTypeKey(sharedSummerTypeValue)
     ? sharedSummerTypeValue
     : null;
+  const [activeTab, setActiveTab] = useState<HomeTab>(
+    sharedSummerType ? "type" : "home",
+  );
 
   useEffect(() => {
     Promise.all([listPlaces(), listItemOptions()])
@@ -703,6 +777,11 @@ function HomePage({
       ),
     [smartRecommendations],
   );
+  const selectTab = (tab: HomeTab) => {
+    setActiveTab(tab);
+    window.scrollTo({ top: 0, behavior: "smooth" });
+    track("home_tab_selected", { tab });
+  };
 
   const toggleCreateItem = (option: ItemOption) => {
     setError("");
@@ -820,108 +899,225 @@ function HomePage({
   };
 
   return (
-    <main className="app home-app" aria-label="챙겨썸 모임 목록">
-      <section className="home-hero">
-        <img
-          className="hero-image"
-          src="/assets/hero-picnic.png"
-          alt=""
-          draggable={false}
-        />
-        <div className="home-hero__content">
-          <div className="brand-pill">챙겨썸</div>
-          <h1>
-            이번 여름 모임,
-            <br />
-            같이 챙겨요
-          </h1>
-          <p>모임을 만들고 친구들과 준비물을 나눠 맡아보세요.</p>
-          <button
-            className="home-primary"
-            type="button"
-            onClick={() => {
-              setError("");
-              setCreateOpen(true);
-            }}
+    <main className="app home-app" aria-label="챙겨썸">
+      {activeTab === "home" ? (
+        <>
+          <section className="home-hero">
+            <img
+              className="hero-image"
+              src="/assets/hero-picnic.png"
+              alt=""
+              draggable={false}
+            />
+            <div className="home-hero__content">
+              <div className="brand-pill">챙겨썸</div>
+              <h1>
+                이번 여름 모임,
+                <br />
+                같이 챙겨요
+              </h1>
+              <p>모임을 만들고 친구들과 준비물을 나눠 맡아보세요.</p>
+              <button
+                className="home-primary"
+                type="button"
+                onClick={() => {
+                  setError("");
+                  setCreateOpen(true);
+                }}
+              >
+                <PlusIcon aria-hidden="true" />
+                새 모임 만들기
+              </button>
+            </div>
+          </section>
+
+          <section
+            className="home-overview"
+            aria-labelledby="home-overview-title"
           >
-            <PlusIcon aria-hidden="true" />
-            새 모임 만들기
-          </button>
-        </div>
-      </section>
+            <div className="home-overview__heading">
+              <div>
+                <p className="eyebrow">SUMMER TOOLBOX</p>
+                <h2 id="home-overview-title">무엇을 확인할까요?</h2>
+              </div>
+              <span>필요한 기능만 골라보세요</span>
+            </div>
+            <div className="home-shortcuts">
+              <button
+                className="home-shortcut home-shortcut--places"
+                type="button"
+                onClick={() => selectTab("places")}
+              >
+                <span>
+                  <GlobeIcon aria-hidden="true" />
+                </span>
+                <strong>장소와 날씨</strong>
+                <small>
+                  {crowdHighlights[0]?.currentCrowd?.populationRange
+                    ? `${crowdHighlights[0].name.replace(" 한강공원", "")} ${crowdHighlights[0].currentCrowd.populationRange}`
+                    : "한강 혼잡도 확인"}
+                </small>
+                <ChevronRightIcon aria-hidden="true" />
+              </button>
+              <button
+                className="home-shortcut home-shortcut--type"
+                type="button"
+                onClick={() => selectTab("type")}
+              >
+                <span>
+                  <MagicWandIcon aria-hidden="true" />
+                </span>
+                <strong>성향 테스트</strong>
+                <small>나의 여름 준비 캐릭터</small>
+                <ChevronRightIcon aria-hidden="true" />
+              </button>
+              <button
+                className="home-shortcut home-shortcut--outings"
+                type="button"
+                onClick={() => selectTab("outings")}
+              >
+                <span>
+                  <CalendarIcon aria-hidden="true" />
+                </span>
+                <strong>내 모임</strong>
+                <small>{sessions.length}개 모임 준비 중</small>
+                <ChevronRightIcon aria-hidden="true" />
+              </button>
+            </div>
 
-      <section className="recent-section" aria-labelledby="recent-title">
-        <CrowdHighlightsCarousel
-          places={crowdHighlights}
-          loading={crowdHighlightsLoading}
-        />
-        <WeatherHighlightsCarousel
-          regions={weatherHighlights}
-          loading={weatherHighlightsLoading}
-        />
-        <SummerTypeTest
-          sharedType={sharedSummerType}
-          onTrack={track}
-          onShare={shareSummerType}
-        />
-        <div className="section-title-row">
-          <div>
-            <p className="eyebrow">MY SUMMER</p>
-            <h2 id="recent-title">내 여름 모임</h2>
-          </div>
-          <span>{sessions.length}개</span>
-        </div>
+            {sessions.length > 0 ? (
+              <div className="home-next-outing">
+                <div>
+                  <strong>최근 모임</strong>
+                  <button type="button" onClick={() => selectTab("outings")}>
+                    모두 보기
+                  </button>
+                </div>
+                <OutingList
+                  sessions={sessions.slice(0, 1)}
+                  summaries={outingSummaries}
+                  onOpenOuting={onOpenOuting}
+                />
+              </div>
+            ) : null}
+          </section>
+        </>
+      ) : null}
 
-        {sessions.length > 0 ? (
-          <div className="outing-cards">
-            {sessions.map((session) => {
-              const summary = outingSummaries.get(session.outingId);
-              const percent =
-                summary && summary.total > 0
-                  ? Math.round((summary.ready / summary.total) * 100)
-                  : 0;
-              return (
-                <button
-                  className="outing-card"
-                  type="button"
-                  key={session.outingId}
-                  onClick={() => onOpenOuting(session.outingId)}
-                >
-                  <span className="outing-card__icon">
-                    <CalendarIcon aria-hidden="true" />
-                  </span>
-                  <span className="outing-card__copy">
-                    <strong>{session.title}</strong>
-                    <span>
-                      {formatDateLabel(session.startsAt)} · {session.placeName}
-                    </span>
-                    {summary ? (
-                      <span className="outing-card__status">
-                        <i aria-hidden="true">
-                          <i style={{ width: `${percent}%` }} />
-                        </i>
-                        <b>
-                          {summary.ready}/{summary.total} 준비
-                          {summary.unassigned > 0
-                            ? ` · ${summary.unassigned}개 주인 찾는 중`
-                            : ""}
-                        </b>
-                      </span>
-                    ) : null}
-                  </span>
-                  <ChevronRightIcon aria-hidden="true" />
-                </button>
-              );
-            })}
+      {activeTab === "places" ? (
+        <section
+          className="home-tab-page home-tab-page--places"
+          aria-labelledby="places-tab-title"
+        >
+          <header className="home-tab-header">
+            <div className="brand-pill">챙겨썸</div>
+            <p className="eyebrow">SUMMER MAP</p>
+            <h1 id="places-tab-title">장소와 날씨</h1>
+            <span>어디로 갈지, 언제 출발할지 한눈에 확인해요.</span>
+          </header>
+          <CrowdHighlightsCarousel
+            places={crowdHighlights}
+            loading={crowdHighlightsLoading}
+          />
+          <WeatherHighlightsCarousel
+            regions={weatherHighlights}
+            loading={weatherHighlightsLoading}
+          />
+        </section>
+      ) : null}
+
+      {activeTab === "type" ? (
+        <section
+          className="home-tab-page home-tab-page--type"
+          aria-labelledby="type-tab-title"
+        >
+          <header className="home-tab-header">
+            <div className="brand-pill">챙겨썸</div>
+            <p className="eyebrow">30 SECOND TEST</p>
+            <h1 id="type-tab-title">나의 여름 준비 유형</h1>
+            <span>친구와 결과를 나누고 찰떡 준비 파트너를 찾아보세요.</span>
+          </header>
+          <SummerTypeTest
+            sharedType={sharedSummerType}
+            onTrack={track}
+            onShare={shareSummerType}
+          />
+        </section>
+      ) : null}
+
+      {activeTab === "outings" ? (
+        <section
+          className="home-tab-page home-tab-page--outings"
+          aria-labelledby="outings-tab-title"
+        >
+          <header className="home-tab-header home-tab-header--with-action">
+            <div>
+              <div className="brand-pill">챙겨썸</div>
+              <p className="eyebrow">MY SUMMER</p>
+              <h1 id="outings-tab-title">내 여름 모임</h1>
+              <span>준비 중인 모임과 친구들의 진행률을 확인해요.</span>
+            </div>
+            <button
+              type="button"
+              aria-label="새 모임 만들기"
+              onClick={() => {
+                setError("");
+                setCreateOpen(true);
+              }}
+            >
+              <PlusIcon aria-hidden="true" />
+            </button>
+          </header>
+          <div className="outing-tab-count">
+            <span>전체</span>
+            <strong>{sessions.length}개</strong>
           </div>
-        ) : (
-          <div className="empty-card">
-            <CalendarIcon aria-hidden="true" />
-            <strong>아직 만든 모임이 없어요</strong>
-            <span>첫 모임을 만들면 여기에 모아드려요.</span>
-          </div>
-        )}
-      </section>
+          <OutingList
+            sessions={sessions}
+            summaries={outingSummaries}
+            onOpenOuting={onOpenOuting}
+          />
+        </section>
+      ) : null}
+
+      <nav className="home-bottom-nav" aria-label="챙겨썸 주요 기능">
+        <button
+          className={activeTab === "home" ? "is-active" : ""}
+          type="button"
+          aria-current={activeTab === "home" ? "page" : undefined}
+          onClick={() => selectTab("home")}
+        >
+          <HomeIcon aria-hidden="true" />
+          <span>홈</span>
+        </button>
+        <button
+          className={activeTab === "places" ? "is-active" : ""}
+          type="button"
+          aria-current={activeTab === "places" ? "page" : undefined}
+          onClick={() => selectTab("places")}
+        >
+          <GlobeIcon aria-hidden="true" />
+          <span>장소</span>
+        </button>
+        <button
+          className={activeTab === "type" ? "is-active" : ""}
+          type="button"
+          aria-current={activeTab === "type" ? "page" : undefined}
+          onClick={() => selectTab("type")}
+        >
+          <MagicWandIcon aria-hidden="true" />
+          <span>성향</span>
+        </button>
+        <button
+          className={activeTab === "outings" ? "is-active" : ""}
+          type="button"
+          aria-current={activeTab === "outings" ? "page" : undefined}
+          onClick={() => selectTab("outings")}
+        >
+          <CalendarIcon aria-hidden="true" />
+          <span>내 모임</span>
+        </button>
+      </nav>
 
       <Sheet
         open={createOpen}

@@ -44,6 +44,10 @@ button:disabled {
   background: #f7fbff;
 }
 
+.home-app {
+  padding-bottom: calc(84px + env(safe-area-inset-bottom));
+}
+
 .hero,
 .home-hero {
   position: relative;
@@ -234,6 +238,301 @@ button:disabled {
   padding: 24px 18px max(32px, env(safe-area-inset-bottom));
   border-radius: 28px 28px 0 0;
   background: #f7fbff;
+}
+
+.home-overview {
+  position: relative;
+  z-index: 2;
+  min-height: 330px;
+  margin-top: -54px;
+  padding: 24px 18px 32px;
+  border-radius: 28px 28px 0 0;
+  background: #f7fbff;
+}
+
+.home-overview__heading {
+  display: flex;
+  align-items: flex-end;
+  justify-content: space-between;
+  gap: 10px;
+  padding: 0 6px 14px;
+}
+
+.home-overview__heading h2 {
+  margin: 0;
+  color: #191f28;
+  font-size: 22px;
+  font-weight: 850;
+  letter-spacing: -0.05em;
+}
+
+.home-overview__heading > span {
+  color: #8b95a1;
+  font-size: 10px;
+  font-weight: 650;
+}
+
+.home-shortcuts {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 10px;
+}
+
+.home-shortcut {
+  position: relative;
+  display: grid;
+  min-width: 0;
+  min-height: 140px;
+  grid-template-rows: auto auto auto;
+  justify-items: start;
+  align-content: end;
+  gap: 4px;
+  overflow: hidden;
+  padding: 15px;
+  border: 1px solid #dce7f1;
+  border-radius: 22px;
+  background: #fff;
+  color: #191f28;
+  text-align: left;
+  box-shadow: 0 9px 24px rgb(55 88 120 / 7%);
+}
+
+.home-shortcut--places {
+  min-height: 124px;
+  grid-column: 1 / -1;
+  padding-left: 84px;
+  background:
+    radial-gradient(circle at 14% 50%, #cce7ff 0 38px, transparent 39px),
+    linear-gradient(135deg, #eaf5ff, #f5f1ff);
+}
+
+.home-shortcut > span {
+  display: grid;
+  width: 42px;
+  height: 42px;
+  place-items: center;
+  border-radius: 14px;
+  background: #e8f3ff;
+  color: #3182f6;
+}
+
+.home-shortcut--places > span {
+  position: absolute;
+  top: 50%;
+  left: 20px;
+  width: 48px;
+  height: 48px;
+  background: #fff;
+  transform: translateY(-50%);
+}
+
+.home-shortcut--type > span {
+  background: #f0ebff;
+  color: #6956cc;
+}
+
+.home-shortcut--outings > span {
+  background: #e8faf3;
+  color: #18a779;
+}
+
+.home-shortcut > span svg {
+  width: 21px;
+  height: 21px;
+}
+
+.home-shortcut > strong {
+  font-size: 16px;
+  font-weight: 850;
+  letter-spacing: -0.035em;
+}
+
+.home-shortcut > small {
+  max-width: 100%;
+  overflow: hidden;
+  color: #6b7684;
+  font-size: 10px;
+  font-weight: 650;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.home-shortcut > svg {
+  position: absolute;
+  right: 13px;
+  bottom: 15px;
+  color: #b0b8c1;
+}
+
+.home-next-outing {
+  display: grid;
+  gap: 10px;
+  margin-top: 26px;
+}
+
+.home-next-outing > div:first-child {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 0 6px;
+}
+
+.home-next-outing > div:first-child strong {
+  color: #333d4b;
+  font-size: 16px;
+  font-weight: 850;
+}
+
+.home-next-outing > div:first-child button {
+  min-height: 36px;
+  padding: 0 4px;
+  border: 0;
+  background: transparent;
+  color: #3182f6;
+  font-size: 12px;
+  font-weight: 750;
+}
+
+.home-tab-page {
+  min-height: 100dvh;
+  padding: 28px 18px 34px;
+  background:
+    linear-gradient(180deg, #eaf5ff 0, #f7fbff 210px, #f7fbff 100%);
+}
+
+.home-tab-page--type {
+  background:
+    linear-gradient(180deg, #f2efff 0, #f7fbff 230px, #f7fbff 100%);
+}
+
+.home-tab-page--outings {
+  background:
+    linear-gradient(180deg, #e9f9f3 0, #f7fbff 220px, #f7fbff 100%);
+}
+
+.home-tab-header {
+  margin-bottom: 28px;
+  padding: 0 6px;
+}
+
+.home-tab-header .brand-pill {
+  margin-bottom: 24px;
+}
+
+.home-tab-header .eyebrow {
+  margin-bottom: 6px;
+}
+
+.home-tab-header h1 {
+  margin: 0;
+  color: #191f28;
+  font-size: 30px;
+  font-weight: 900;
+  letter-spacing: -0.06em;
+}
+
+.home-tab-header > span,
+.home-tab-header > div > span {
+  display: block;
+  margin-top: 8px;
+  color: #596573;
+  font-size: 13px;
+  font-weight: 650;
+  line-height: 1.5;
+  letter-spacing: -0.025em;
+}
+
+.home-tab-header--with-action {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 48px;
+  align-items: end;
+  gap: 12px;
+}
+
+.home-tab-header--with-action .brand-pill {
+  margin-bottom: 24px;
+}
+
+.home-tab-header--with-action > button {
+  display: grid;
+  width: 48px;
+  height: 48px;
+  padding: 0;
+  place-items: center;
+  border: 0;
+  border-radius: 16px;
+  background: #3182f6;
+  color: #fff;
+  box-shadow: 0 9px 18px rgb(49 130 246 / 20%);
+}
+
+.home-tab-header--with-action > button svg {
+  width: 21px;
+  height: 21px;
+}
+
+.home-tab-page--type .summer-type-entry {
+  margin-bottom: 0;
+}
+
+.outing-tab-count {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: 10px;
+  padding: 0 6px;
+  color: #4e5968;
+  font-size: 13px;
+  font-weight: 750;
+}
+
+.outing-tab-count strong {
+  color: #18a779;
+}
+
+.home-bottom-nav {
+  position: fixed;
+  right: 0;
+  bottom: 0;
+  left: 0;
+  z-index: 900;
+  display: grid;
+  min-height: calc(70px + env(safe-area-inset-bottom));
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  padding: 7px 8px max(7px, env(safe-area-inset-bottom));
+  border-top: 1px solid rgb(215 224 234 / 82%);
+  background: rgb(255 255 255 / 95%);
+  box-shadow: 0 -8px 24px rgb(34 53 72 / 8%);
+  backdrop-filter: blur(16px);
+}
+
+.home-bottom-nav button {
+  display: grid;
+  min-width: 0;
+  min-height: 52px;
+  align-content: center;
+  justify-items: center;
+  gap: 4px;
+  padding: 4px 2px;
+  border: 0;
+  border-radius: 14px;
+  background: transparent;
+  color: #8b95a1;
+}
+
+.home-bottom-nav button svg {
+  width: 21px;
+  height: 21px;
+}
+
+.home-bottom-nav button span {
+  font-size: 10px;
+  font-weight: 750;
+}
+
+.home-bottom-nav button.is-active {
+  background: #edf5ff;
+  color: #2172e5;
 }
 
 .crowd-highlights {
@@ -4245,6 +4544,13 @@ button.ai-briefing-action {
     max-width: 480px;
     margin: 0 auto;
     box-shadow: 0 0 0 1px rgb(0 0 0 / 5%);
+  }
+
+  .home-bottom-nav {
+    right: auto;
+    left: 50%;
+    width: 480px;
+    transform: translateX(-50%);
   }
 
   .sheet {
