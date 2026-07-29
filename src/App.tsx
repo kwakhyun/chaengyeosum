@@ -12,6 +12,7 @@ import {
   CalendarIcon,
   CameraIcon,
   CheckIcon,
+  ChevronLeftIcon,
   ChevronRightIcon,
   CopyIcon,
   Cross2Icon,
@@ -1754,9 +1755,23 @@ function OutingPage({
           draggable={false}
         />
         <div className="hero-content">
-          <button className="brand-pill brand-button" type="button" onClick={onHome}>
-            챙겨썸
-          </button>
+          <div className="hero-navigation">
+            <button
+              className="hero-back-button"
+              type="button"
+              aria-label="내 모임으로 돌아가기"
+              onClick={onHome}
+            >
+              <ChevronLeftIcon aria-hidden="true" />
+            </button>
+            <button
+              className="brand-pill brand-button"
+              type="button"
+              onClick={onHome}
+            >
+              챙겨썸
+            </button>
+          </div>
           <p className="outing-date">
             {formatDateLabel(bundle.outing.startsAt)}
           </p>

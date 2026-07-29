@@ -31,8 +31,8 @@ export type SummerTypeResult = {
 export const SUMMER_TYPE_RESULTS: Record<SummerTypeKey, SummerTypeResult> = {
   planner: {
     key: "planner",
-    name: "빈틈 제로 총대장",
-    shortName: "총대장",
+    name: "빈틈 제로 플래너",
+    shortName: "플래너",
     tagline: "약속이 잡히는 순간, 체크리스트가 열린다",
     description:
       "날짜부터 준비물 담당까지 착착 정리해 친구들이 마음 놓고 따라오게 해요.",

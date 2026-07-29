@@ -113,6 +113,32 @@ button:disabled {
   border: 0;
 }
 
+.hero-navigation {
+  display: flex;
+  align-items: center;
+  gap: 9px;
+}
+
+.hero-back-button {
+  display: grid;
+  width: 44px;
+  height: 44px;
+  flex: 0 0 44px;
+  padding: 0;
+  place-items: center;
+  border: 1px solid rgb(255 255 255 / 82%);
+  border-radius: 15px;
+  background: rgb(255 255 255 / 94%);
+  color: #191f28;
+  box-shadow: 0 6px 18px rgb(51 61 75 / 13%);
+  backdrop-filter: blur(8px);
+}
+
+.hero-back-button svg {
+  width: 24px;
+  height: 24px;
+}
+
 .home-hero h1 {
   margin: 26px 0 0;
   color: #161d2a;
