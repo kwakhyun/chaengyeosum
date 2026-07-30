@@ -7,6 +7,8 @@
 </p>
 
 <p align="center">
+  <a href="https://minion.toss.im/FfgBn2o8"><strong>Apps in Toss에서 실행</strong></a>
+  ·
   <a href="https://chaengyeosum-mobile.khyun97.chatgpt.site"><strong>라이브 데모</strong></a>
   ·
   <a href="./SUBMISSION.md">챌린지 출품 문서</a>
