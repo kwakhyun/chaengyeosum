@@ -42,31 +42,19 @@ type CrewResult = {
 };
 
 type CrewStory = Omit<CrewResult, "score" | "missingType">;
-type CrewPattern =
-  | "planner"
-  | "guardian"
-  | "vibe"
-  | "adventurer"
-  | "planner+guardian"
-  | "planner+vibe"
-  | "planner+adventurer"
-  | "guardian+vibe"
-  | "guardian+adventurer"
-  | "vibe+adventurer"
-  | "planner+guardian+vibe"
-  | "planner+guardian+adventurer"
-  | "planner+vibe+adventurer"
-  | "guardian+vibe+adventurer"
-  | "planner+guardian+vibe+adventurer";
 
 const TYPE_ORDER: SummerTypeKey[] = [
   "planner",
   "guardian",
   "vibe",
   "adventurer",
+  "foodie",
+  "navigator",
+  "connector",
+  "chill",
 ];
 
-const CREW_STORIES = {
+const CREW_STORIES: Record<string, CrewStory> = {
   planner: {
     name: "체크리스트 평행이론",
     catchphrase: "말하지 않아도 다음 순서를 아는, 정리력으로 통하는 조합이에요.",
@@ -90,6 +78,42 @@ const CREW_STORIES = {
     catchphrase: "목적지보다 출발이 먼저, 변수까지 웃음거리로 만드는 조합이에요.",
     recommendedPlace: "근교 수상 액티비티",
     mission: "출발 전에 필수 준비물 3개만 확인하기",
+  },
+  foodie: {
+    name: "당 충전 미식 원정대",
+    catchphrase: "배고플 틈 없이 다음 메뉴가 등장하는 행복한 조합이에요.",
+    recommendedPlace: "야시장 푸드 피크닉",
+    mission: "각자 처음 보는 여름 간식 하나씩 고르기",
+  },
+  navigator: {
+    name: "길 잃음 제로 안내단",
+    catchphrase: "환승도 주차도 그늘길도, 가장 시원한 동선으로 통하는 조합이에요.",
+    recommendedPlace: "근교 드라이브 코스",
+    mission: "계획에 없던 골목 하나만 탐험하기",
+  },
+  connector: {
+    name: "단톡방 온도 36.5도",
+    catchphrase: "누구도 소외되지 않게 말과 마음을 이어주는 다정한 조합이에요.",
+    recommendedPlace: "여름 음악 페스티벌",
+    mission: "조용한 친구가 고른 코스부터 가보기",
+  },
+  chill: {
+    name: "그늘 명당 휴식단",
+    catchphrase: "서두르지 않아도 오래 즐기는 법을 아는 여유 만렙 조합이에요.",
+    recommendedPlace: "숲속 계곡 평상",
+    mission: "가벼운 액티비티 하나는 꼭 도전하기",
+  },
+  "foodie+connector": {
+    name: "메뉴 합의 만장일치단",
+    catchphrase: "모두의 취향을 듣고 가장 맛있는 답을 찾아내는 조합이에요.",
+    recommendedPlace: "여름 야시장 투어",
+    mission: "친구마다 최애 메뉴를 하나씩 나눠 먹기",
+  },
+  "navigator+chill": {
+    name: "최단거리 여유 여행단",
+    catchphrase: "덜 걷는 좋은 길과 제대로 쉬는 타이밍이 만난 조합이에요.",
+    recommendedPlace: "그늘 많은 호수 산책로",
+    mission: "지도 없이 노을 방향으로 10분 걷기",
   },
   "planner+guardian": {
     name: "철벽 준비 썸머쉴드",
@@ -157,7 +181,7 @@ const CREW_STORIES = {
     recommendedPlace: "워터파크 풀코스",
     mission: "각자 시그니처 준비물 하나씩 맡기",
   },
-} satisfies Record<CrewPattern, CrewStory>;
+};
 
 function getSavedFriends(): FriendType[] {
   try {
@@ -219,6 +243,8 @@ function resolveCrew(crew: SummerTypeKey[]): CrewResult {
   const complementaryPairs = [
     hasPair(uniqueCrew, "planner", "adventurer"),
     hasPair(uniqueCrew, "guardian", "vibe"),
+    hasPair(uniqueCrew, "foodie", "connector"),
+    hasPair(uniqueCrew, "navigator", "chill"),
   ].filter(Boolean).length;
   const score = Math.min(
     99,
@@ -226,8 +252,26 @@ function resolveCrew(crew: SummerTypeKey[]): CrewResult {
   );
   const missingType =
     TYPE_ORDER.find((key) => !uniqueCrew.includes(key)) ?? null;
-  const pattern = uniqueCrew.join("+") as CrewPattern;
-  const story = CREW_STORIES[pattern] ?? CREW_STORIES.planner;
+  const pattern = uniqueCrew.join("+");
+  const leadType = uniqueCrew[0] ?? "planner";
+  const lead = SUMMER_TYPE_RESULTS[leadType];
+  const story = CREW_STORIES[pattern] ?? {
+    name: `${uniqueCrew
+      .map((type) => SUMMER_TYPE_RESULTS[type].shortName)
+      .join("·")} 여름 합동단`,
+    catchphrase: "서로 다른 준비 재능이 겹치지 않아 예상 밖의 빈틈까지 채우는 조합이에요.",
+    recommendedPlace:
+      leadType === "foodie"
+        ? "여름 야시장 피크닉"
+        : leadType === "navigator"
+          ? "근교 드라이브 코스"
+          : leadType === "connector"
+            ? "야외 음악 페스티벌"
+            : leadType === "chill"
+              ? "그늘 많은 물가 쉼터"
+              : "한강 선셋 피크닉",
+    mission: `${lead.shortName}의 시그니처 준비물 ‘${lead.signatureItem}’ 함께 써보기`,
+  };
 
   return {
     ...story,
@@ -419,7 +463,7 @@ export function SummerCrewBuilder({
           <div>
             <p className="eyebrow">SUMMER CREW</p>
             <h2 id="summer-crew-title">우리 여름 조합은?</h2>
-            <span>친구가 공유한 실제 결과로 15가지 모임 케미를 확인해요.</span>
+            <span>8가지 실제 친구 유형으로 달라지는 모임 케미를 확인해요.</span>
           </div>
           {members.length > 1 ? (
             <button type="button" onClick={selectAll}>

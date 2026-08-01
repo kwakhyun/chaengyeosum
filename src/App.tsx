@@ -445,6 +445,7 @@ function currentOutingId() {
 }
 
 type HomeTab = "home" | "places" | "type" | "outings";
+type OutingDetailTab = "packing" | "briefing" | "activity";
 type CreateStep = 1 | 2 | 3 | 4;
 type UserCoordinates = {
   latitude: number;
@@ -1299,7 +1300,7 @@ function HomePage({
     const message = [
       `🌞 내 여름 준비 캐릭터는 ‘${result.name}’`,
       `시그니처 준비물은 ${result.signatureItem}!`,
-      "너는 어떤 유형인지 30초 만에 확인해봐 👇",
+      "너는 8종 캐릭터 중 어떤 유형인지 1분 만에 확인해봐 👇",
     ].join("\n");
     let shareResult: "shared" | "copied" = "copied";
 
@@ -1578,7 +1579,7 @@ function HomePage({
           aria-labelledby="type-tab-title"
         >
           <header className="home-tab-header">
-            <p className="eyebrow">30 SECOND TEST</p>
+            <p className="eyebrow">1 MINUTE TEST</p>
             <h1 id="type-tab-title">나의 여름 준비 유형</h1>
             <span>친구와 결과를 나누고 찰떡 준비 파트너를 찾아보세요.</span>
           </header>
@@ -2303,7 +2304,10 @@ function OutingPage({
   const [summerEventsLoading, setSummerEventsLoading] = useState(false);
   const [summerEventsError, setSummerEventsError] = useState("");
   const [highlightedItemId, setHighlightedItemId] = useState("");
+  const [detailTab, setDetailTab] =
+    useState<OutingDetailTab>("packing");
   const previousReadyCount = useRef<number | null>(null);
+  const detailTabsRef = useRef<HTMLElement>(null);
 
   const refresh = useCallback(
     async (nextSession = session) => {
@@ -2627,12 +2631,27 @@ function OutingPage({
     );
     if (!item) return;
     setHighlightedItemId(item.id);
+    setDetailTab("packing");
     window.requestAnimationFrame(() => {
-      document
-        .getElementById(`packing-item-${item.id}`)
-        ?.scrollIntoView({ behavior: "smooth", block: "center" });
+      window.requestAnimationFrame(() => {
+        document
+          .getElementById(`packing-item-${item.id}`)
+          ?.scrollIntoView({ behavior: "smooth", block: "center" });
+      });
     });
     track("ai_briefing_action_opened", { item_id: item.key });
+  };
+
+  const switchDetailTab = (tab: OutingDetailTab) => {
+    if (tab === detailTab) return;
+    setDetailTab(tab);
+    track("outing_detail_tab_selected", { tab });
+    window.requestAnimationFrame(() => {
+      detailTabsRef.current?.scrollIntoView({
+        behavior: "smooth",
+        block: "start",
+      });
+    });
   };
 
   const handleAiShare = async () => {
@@ -2822,6 +2841,47 @@ function OutingPage({
         </div>
       </section>
 
+      <nav
+        ref={detailTabsRef}
+        className="outing-detail-tabs"
+        aria-label="모임 상세 메뉴"
+      >
+        <button
+          className={detailTab === "packing" ? "is-active" : ""}
+          type="button"
+          aria-pressed={detailTab === "packing"}
+          onClick={() => switchDetailTab("packing")}
+        >
+          <BackpackIcon aria-hidden="true" />
+          <span>준비물</span>
+          {unfinishedCount > 0 ? <small>{unfinishedCount}</small> : null}
+        </button>
+        <button
+          className={detailTab === "briefing" ? "is-active" : ""}
+          type="button"
+          aria-pressed={detailTab === "briefing"}
+          onClick={() => switchDetailTab("briefing")}
+        >
+          <MagicWandIcon aria-hidden="true" />
+          <span>장소·AI</span>
+        </button>
+        <button
+          className={detailTab === "activity" ? "is-active" : ""}
+          type="button"
+          aria-pressed={detailTab === "activity"}
+          onClick={() => switchDetailTab("activity")}
+        >
+          <PersonIcon aria-hidden="true" />
+          <span>친구 소식</span>
+          {events.length > 0 ? <small>{Math.min(events.length, 9)}</small> : null}
+        </button>
+      </nav>
+
+      <div
+        className="outing-detail-panel"
+        hidden={detailTab !== "packing"}
+      >
+
       {bundle.viewer && unassignedItems.length > 0 ? (
         <button
           className="invite-nudge"
@@ -2868,6 +2928,26 @@ function OutingPage({
         </button>
       ) : null}
 
+      {eventDay >= 0 && eventDay <= 1 && unfinishedCount > 0 ? (
+        <section className="last-check-card" aria-label="출발 전 마지막 점검">
+          <CalendarIcon aria-hidden="true" />
+          <span>
+            <strong>
+              {eventDay === 0 ? "오늘 출발해요" : "내일 출발해요"}
+            </strong>
+            <small>아직 {unfinishedCount}개가 준비 중이에요</small>
+          </span>
+          <b>마지막 점검</b>
+        </section>
+      ) : null}
+
+      </div>
+
+      <div
+        className="outing-detail-panel"
+        hidden={detailTab !== "briefing"}
+      >
+
       {bundle.viewer ? (
         <AiBriefingCard
           briefing={aiBriefing}
@@ -2893,6 +2973,21 @@ function OutingPage({
           onSearchEvents={() => void handleSummerEventSearch()}
         />
       ) : null}
+
+      {!bundle.viewer ? (
+        <section className="outing-tab-empty">
+          <MagicWandIcon aria-hidden="true" />
+          <strong>참여하면 장소 브리핑을 볼 수 있어요</strong>
+          <span>혼잡도와 여름 행사, AI 준비 팁을 한곳에 모아드려요.</span>
+        </section>
+      ) : null}
+
+      </div>
+
+      <div
+        className="outing-detail-panel outing-detail-panel--packing-list"
+        hidden={detailTab !== "packing"}
+      >
 
       <section className="smart-packing-card" aria-labelledby="smart-title">
         <div className="smart-packing-card__heading">
@@ -2945,18 +3040,83 @@ function OutingPage({
         </div>
       </section>
 
-      {eventDay >= 0 && eventDay <= 1 && unfinishedCount > 0 ? (
-        <section className="last-check-card" aria-label="출발 전 마지막 점검">
-          <CalendarIcon aria-hidden="true" />
+      </div>
+
+      <div
+        className="outing-detail-panel"
+        hidden={detailTab !== "activity"}
+      >
+
+      <section className="outing-participants-card" aria-labelledby="participants-title">
+        <div className="outing-participants-card__heading">
           <span>
-            <strong>
-              {eventDay === 0 ? "오늘 출발해요" : "내일 출발해요"}
-            </strong>
-            <small>아직 {unfinishedCount}개가 준비 중이에요</small>
+            <strong id="participants-title">함께 준비하는 친구</strong>
+            <small>{bundle.participants.length}명 참여 중</small>
           </span>
-          <b>마지막 점검</b>
-        </section>
-      ) : null}
+          {bundle.viewer ? (
+            <button
+              type="button"
+              onClick={() => {
+                setCopied(false);
+                setInviteOpen(true);
+              }}
+            >
+              <PlusIcon aria-hidden="true" />
+              초대
+            </button>
+          ) : null}
+        </div>
+        <ul>
+          {bundle.participants.slice(0, 6).map((participant) => {
+            const participantItems = bundle.items.filter(
+              (item) => item.owner?.id === participant.id,
+            );
+            const participantReady = participantItems.filter(
+              (item) => item.done,
+            ).length;
+            return (
+              <li key={participant.id}>
+                <img
+                  src={avatarSrc(participant.avatarKey)}
+                  alt=""
+                  draggable={false}
+                />
+                <span>
+                  <strong>
+                    {participant.id === bundle.viewer?.id
+                      ? `${participant.name} · 나`
+                      : participant.name}
+                  </strong>
+                  <small>
+                    {participantItems.length > 0
+                      ? `${participantReady}/${participantItems.length}개 준비`
+                      : "아직 맡은 준비물이 없어요"}
+                  </small>
+                </span>
+                <b
+                  className={
+                    participantItems.length > 0 &&
+                    participantReady === participantItems.length
+                      ? "is-ready"
+                      : ""
+                  }
+                >
+                  {participantItems.length === 0
+                    ? "대기"
+                    : participantReady === participantItems.length
+                      ? "완료"
+                      : `${participantItems.length - participantReady}개 남음`}
+                </b>
+              </li>
+            );
+          })}
+        </ul>
+        {bundle.participants.length > 6 ? (
+          <p className="outing-participants-card__more">
+            외 {bundle.participants.length - 6}명도 함께 준비하고 있어요
+          </p>
+        ) : null}
+      </section>
 
       {events.length > 0 ? (
         <section className="activity-feed" aria-labelledby="activity-title">
@@ -3009,7 +3169,20 @@ function OutingPage({
             ))}
           </ul>
         </section>
-      ) : null}
+      ) : (
+        <section className="outing-tab-empty">
+          <HeartIcon aria-hidden="true" />
+          <strong>아직 새로운 소식이 없어요</strong>
+          <span>친구가 참여하거나 준비물을 맡으면 여기에 바로 보여요.</span>
+        </section>
+      )}
+
+      </div>
+
+      <div
+        className="outing-detail-panel outing-detail-panel--packing-list"
+        hidden={detailTab !== "packing"}
+      >
 
       <section className="packing-section" aria-labelledby="packing-title">
         <div className="packing-title-row">
@@ -3092,6 +3265,8 @@ function OutingPage({
           ))}
         </div>
       </section>
+
+      </div>
 
       {bundle.viewer ? (
         <div className="action-dock" aria-label="준비 작업">

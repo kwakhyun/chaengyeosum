@@ -1,10 +1,14 @@
 import { useState } from "react";
 import {
+  BackpackIcon,
   CameraIcon,
+  ChatBubbleIcon,
   CheckIcon,
   ChevronLeftIcon,
   ChevronRightIcon,
   CopyIcon,
+  GlobeIcon,
+  HeartIcon,
   LightningBoltIcon,
   ReloadIcon,
   RocketIcon,
@@ -12,7 +16,15 @@ import {
 
 import { Sheet } from "./Sheet";
 
-export type SummerTypeKey = "planner" | "guardian" | "vibe" | "adventurer";
+export type SummerTypeKey =
+  | "planner"
+  | "guardian"
+  | "vibe"
+  | "adventurer"
+  | "foodie"
+  | "navigator"
+  | "connector"
+  | "chill";
 
 export type SummerTypeResult = {
   key: SummerTypeKey;
@@ -89,38 +101,161 @@ export const SUMMER_TYPE_RESULTS: Record<SummerTypeKey, SummerTypeResult> = {
     imageAlt:
       "휴대폰 하나 들고 바로 뛰어가는 민트색 모자의 3D 캐릭터",
   },
+  foodie: {
+    key: "foodie",
+    name: "간식 레이더 먹잘알",
+    shortName: "먹잘알",
+    tagline: "메뉴가 정해져야 진짜 약속이 시작된다",
+    description:
+      "사람 수와 취향을 빠르게 읽고, 지칠 타이밍마다 딱 맞는 메뉴로 모임을 충전해요.",
+    signatureItem: "쿨러백",
+    strengths: ["메뉴 선정 천재", "당 충전 타이밍"],
+    watchOut: "먹을 건 완벽한데 돗자리 담당을 깜빡할 수 있어요.",
+    match: "connector",
+    image: "/assets/summer-type-foodie-v1.webp",
+    imageAlt:
+      "과일과 샌드위치, 시원한 음료가 든 쿨러백을 챙긴 코랄색 3D 캐릭터",
+  },
+  navigator: {
+    key: "navigator",
+    name: "동선 최적화 길잡이",
+    shortName: "길잡이",
+    tagline: "환승·주차·그늘길까지 머릿속에 지도가 열린다",
+    description:
+      "복잡한 이동도 가장 덜 덥고 덜 헤매는 길로 바꿔 친구들의 체력을 아껴줘요.",
+    signatureItem: "지도 앱",
+    strengths: ["최단 동선 설계", "길 잃음 방지"],
+    watchOut: "좋은 경로가 세 개면 고르는 데 가장 오래 걸릴 수 있어요.",
+    match: "chill",
+    image: "/assets/summer-type-navigator-v1.webp",
+    imageAlt:
+      "지도와 나침반으로 여름 모임 동선을 찾는 파란색 3D 캐릭터",
+  },
+  connector: {
+    key: "connector",
+    name: "단톡방 온도지킴이",
+    shortName: "온도지킴이",
+    tagline: "답장 없는 친구까지 자연스럽게 모아낸다",
+    description:
+      "조용한 친구의 의견도 놓치지 않고 모두가 함께 웃는 분위기를 만드는 모임의 접착제예요.",
+    signatureItem: "미니 무전기",
+    strengths: ["분위기 접착제", "소외 없는 모임"],
+    watchOut: "모두의 의견을 듣다가 내 취향을 마지막에 말할 수 있어요.",
+    match: "foodie",
+    image: "/assets/summer-type-connector-v1.webp",
+    imageAlt:
+      "대화 풍선과 하트를 보내 친구들을 연결하는 보라색 3D 캐릭터",
+  },
+  chill: {
+    key: "chill",
+    name: "그늘 사수 휴식요정",
+    shortName: "휴식요정",
+    tagline: "잘 쉬어야 오래 논다는 걸 누구보다 안다",
+    description:
+      "그늘과 바람, 쉬는 타이밍을 기가 막히게 찾아 모두가 끝까지 기분 좋게 놀게 해요.",
+    signatureItem: "쿨링 타월",
+    strengths: ["체력 배분 고수", "그늘 명당 탐색"],
+    watchOut: "너무 편한 자리를 찾으면 다음 코스로 가기 싫어질 수 있어요.",
+    match: "navigator",
+    image: "/assets/summer-type-chill-v1.webp",
+    imageAlt:
+      "그늘 아래 돗자리에 누워 선풍기와 시원한 음료를 즐기는 민트색 3D 캐릭터",
+  },
 };
 
 const QUESTIONS: Array<{
+  scene: string;
+  image: string;
+  imageAlt: string;
   title: string;
   answers: Array<{ label: string; type: SummerTypeKey }>;
 }> = [
   {
+    scene: "약속이 생긴 순간",
+    image: "/assets/summer-quiz-q1-date-v1.webp",
+    imageAlt: "달력과 체크리스트, 카메라를 보며 약속을 준비하는 세 친구",
     title: "여름 모임 날짜가 잡혔어요. 가장 먼저 하는 일은?",
     answers: [
       { label: "날짜·장소와 준비물을 먼저 정리한다", type: "planner" },
-      { label: "재밌는 사진과 맛집부터 단톡방에 보낸다", type: "vibe" },
+      { label: "사진 스폿과 플레이리스트부터 찾는다", type: "vibe" },
+      { label: "조용한 친구까지 의견을 물어본다", type: "connector" },
     ],
   },
   {
+    scene: "비 올 확률 40%",
+    image: "/assets/summer-quiz-q2-rain-v1.webp",
+    imageAlt: "맑은 하늘과 비구름 사이에서 우산과 지도를 살피는 세 친구",
     title: "당일 비 소식이 40%라면?",
     answers: [
       { label: "우산과 대체 장소까지 미리 챙긴다", type: "guardian" },
-      { label: "비 와도 추억이지. 일단 만나고 본다", type: "adventurer" },
+      { label: "비를 덜 맞는 이동 경로부터 찾는다", type: "navigator" },
+      { label: "비 와도 추억이지. 일단 출발한다", type: "adventurer" },
     ],
   },
   {
-    title: "친구들이 준비물을 아직 안 골랐어요.",
+    scene: "점심 메뉴 회의",
+    image: "/assets/summer-quiz-q3-snack-v1.webp",
+    imageAlt: "여름 피크닉 테이블에서 간식과 메뉴를 고르는 세 친구",
+    title: "점심과 간식을 정할 때 나는?",
     answers: [
-      { label: "누가 뭘 맡을지 보기 좋게 나눈다", type: "planner" },
-      { label: "혹시 모르니 빠진 건 내가 더 챙긴다", type: "guardian" },
+      { label: "취향과 양을 계산해 메뉴 조합을 완성한다", type: "foodie" },
+      { label: "주문 시간과 담당을 보기 좋게 나눈다", type: "planner" },
+      { label: "가볍게 먹고 편하게 쉬는 게 최고다", type: "chill" },
     ],
   },
   {
-    title: "가방에 마지막으로 넣고 싶은 건?",
+    scene: "만남 장소가 갑자기 변경",
+    image: "/assets/summer-quiz-q4-route-v1.webp",
+    imageAlt: "지도와 여러 위치 핀을 보며 새 만남 장소를 찾는 세 친구",
+    title: "출발 직전 만남 장소가 바뀌었어요.",
     answers: [
-      { label: "카메라·간식·플레이리스트", type: "vibe" },
-      { label: "지갑과 폰이면 충분하다", type: "adventurer" },
+      { label: "새 경로와 도착 시간을 바로 공유한다", type: "navigator" },
+      { label: "헷갈리는 친구에게 따로 연락한다", type: "connector" },
+      { label: "새 장소도 재밌겠다며 바로 방향을 튼다", type: "adventurer" },
+    ],
+  },
+  {
+    scene: "가방의 마지막 한 칸",
+    image: "/assets/summer-quiz-q5-bag-v1.webp",
+    imageAlt: "열린 여름 가방 위 카메라와 과일 간식, 선크림을 고르는 친구들",
+    title: "딱 하나만 더 챙길 수 있다면?",
+    answers: [
+      { label: "오늘을 오래 남길 작은 카메라", type: "vibe" },
+      { label: "친구들과 나눌 시원한 과일 간식", type: "foodie" },
+      { label: "누군가 꼭 찾을 선크림과 상비약", type: "guardian" },
+    ],
+  },
+  {
+    scene: "친구가 20분 늦는대요",
+    image: "/assets/summer-quiz-q6-late-v1.webp",
+    imageAlt: "공원 시계 아래에서 늦는 친구를 기다리는 서로 다른 성향의 세 친구",
+    title: "한 친구가 조금 늦는다고 연락했어요.",
+    answers: [
+      { label: "모두에게 상황을 알려 어색함을 없앤다", type: "connector" },
+      { label: "그늘을 찾아 시원한 음료를 마시며 쉰다", type: "chill" },
+      { label: "뒤 일정을 계산해 계획을 살짝 조정한다", type: "planner" },
+    ],
+  },
+  {
+    scene: "가장 뜨거운 오후 2시",
+    image: "/assets/summer-quiz-q7-heat-v1.webp",
+    imageAlt: "뜨거운 강변에서 급수대와 물놀이, 그늘길을 고르는 세 친구",
+    title: "갑자기 모두가 더위에 지쳤어요.",
+    answers: [
+      { label: "물과 선크림으로 즉석 쿨다운존을 만든다", type: "guardian" },
+      { label: "가까운 물놀이 구역으로 신나게 뛰어간다", type: "adventurer" },
+      { label: "그늘이 이어지는 다음 동선을 찾아낸다", type: "navigator" },
+    ],
+  },
+  {
+    scene: "완벽한 여름의 엔딩",
+    image: "/assets/summer-quiz-q8-ending-v1.webp",
+    imageAlt: "노을 진 강변에서 사진과 간식, 휴식을 즐기며 하루를 마무리하는 친구들",
+    title: "오늘을 가장 기분 좋게 마무리하는 방법은?",
+    answers: [
+      { label: "노을과 단체 사진으로 장면을 남긴다", type: "vibe" },
+      { label: "마지막 간식과 음료를 다 같이 나눈다", type: "foodie" },
+      { label: "돗자리에 누워 오늘의 바람을 즐긴다", type: "chill" },
     ],
   },
 ];
@@ -131,7 +266,11 @@ function iconFor(type: SummerTypeKey) {
   if (type === "planner") return <CheckIcon aria-hidden="true" />;
   if (type === "guardian") return <LightningBoltIcon aria-hidden="true" />;
   if (type === "vibe") return <CameraIcon aria-hidden="true" />;
-  return <RocketIcon aria-hidden="true" />;
+  if (type === "adventurer") return <RocketIcon aria-hidden="true" />;
+  if (type === "foodie") return <BackpackIcon aria-hidden="true" />;
+  if (type === "navigator") return <GlobeIcon aria-hidden="true" />;
+  if (type === "connector") return <ChatBubbleIcon aria-hidden="true" />;
+  return <HeartIcon aria-hidden="true" />;
 }
 
 export function isSummerTypeKey(value: string | null): value is SummerTypeKey {
@@ -139,7 +278,11 @@ export function isSummerTypeKey(value: string | null): value is SummerTypeKey {
     value === "planner" ||
     value === "guardian" ||
     value === "vibe" ||
-    value === "adventurer"
+    value === "adventurer" ||
+    value === "foodie" ||
+    value === "navigator" ||
+    value === "connector" ||
+    value === "chill"
   );
 }
 
@@ -158,6 +301,10 @@ function resolveResult(answers: SummerTypeKey[]) {
     guardian: 0,
     vibe: 0,
     adventurer: 0,
+    foodie: 0,
+    navigator: 0,
+    connector: 0,
+    chill: 0,
   };
   answers.forEach((answer) => {
     scores[answer] += 1;
@@ -202,7 +349,7 @@ export function SummerTypeTest({
     ? {
         label: "친구 결과 도착",
         title: `친구는 ‘${sharedResult.shortName}’`,
-        description: "나는 어떤 여름 준비 캐릭터인지 30초 만에 확인해요.",
+        description: "나는 어떤 여름 준비 캐릭터인지 1분 만에 확인해요.",
         action: "나도 테스트하기",
       }
     : result
@@ -213,9 +360,9 @@ export function SummerTypeTest({
           action: "결과 다시 보기",
         }
       : {
-          label: "30초 성향 테스트",
+          label: "1분 성향 테스트",
           title: "여름 모임에서 나는 어떤 캐릭터?",
-          description: "4개 질문에 답하고 친구와 결과를 비교해보세요.",
+          description: "8개 상황에 답하고 8종 캐릭터 중 내 유형을 찾아보세요.",
           action: "테스트하기",
         };
 
@@ -313,7 +460,7 @@ export function SummerTypeTest({
         <span className="summer-type-entry__characters" aria-hidden="true">
           {(sharedResult
             ? [sharedResult.key, sharedResult.match]
-            : (["planner", "guardian", "vibe", "adventurer"] as SummerTypeKey[])
+            : (["planner", "foodie", "connector", "chill"] as SummerTypeKey[])
           ).map((type) => (
             <i
               className={`summer-type-character summer-type-character--${type}`}
@@ -328,6 +475,7 @@ export function SummerTypeTest({
       <Sheet
         open={open}
         onClose={() => setOpen(false)}
+        resetScrollKey={showResult ? `result-${resultKey}` : questionIndex}
         title={showResult ? "나의 여름 준비 캐릭터" : "여름 모임 성향 테스트"}
         description={
           showResult
@@ -437,6 +585,14 @@ export function SummerTypeTest({
                 <i style={{ width: `${progress}%` }} />
               </div>
             </div>
+            <figure className="summer-type-question-visual" key={currentQuestion.image}>
+              <img
+                src={currentQuestion.image}
+                alt={currentQuestion.imageAlt}
+                draggable={false}
+              />
+              <figcaption>{currentQuestion.scene}</figcaption>
+            </figure>
             <fieldset key={questionIndex}>
               <legend>{currentQuestion.title}</legend>
               <div>

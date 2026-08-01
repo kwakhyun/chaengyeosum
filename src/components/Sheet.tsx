@@ -12,12 +12,14 @@ export function Sheet({
   description,
   onClose,
   children,
+  resetScrollKey,
 }: {
   open: boolean;
   title: string;
   description: string;
   onClose: () => void;
   children: ReactNode;
+  resetScrollKey?: string | number;
 }) {
   const titleId = useId();
   const descriptionId = useId();
@@ -65,6 +67,11 @@ export function Sheet({
       previousFocus?.focus();
     };
   }, [open]);
+
+  useEffect(() => {
+    if (!open || resetScrollKey === undefined) return;
+    dialogRef.current?.scrollTo({ top: 0, behavior: "auto" });
+  }, [open, resetScrollKey]);
 
   useEffect(() => {
     if (!open) return;
