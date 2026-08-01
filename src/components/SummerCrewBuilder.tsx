@@ -15,6 +15,7 @@ import {
   SUMMER_TYPE_RESULTS,
   type SummerTypeKey,
 } from "./SummerTypeTest";
+import { normalizeUserDisplayName } from "../toss-user-profile";
 
 const FRIENDS_STORAGE_KEY = "chaengyeosum.summer-friends.v1";
 
@@ -215,7 +216,11 @@ function parseFriendTypeLink(value: string) {
   try {
     const url = new URL(value.trim(), window.location.origin);
     const type = url.searchParams.get("summerType");
-    return isSummerTypeKey(type) ? type : null;
+    if (!isSummerTypeKey(type)) return null;
+    return {
+      type,
+      name: normalizeUserDisplayName(url.searchParams.get("summerName")),
+    };
   } catch {
     return null;
   }
@@ -282,11 +287,17 @@ function resolveCrew(crew: SummerTypeKey[]): CrewResult {
 
 export function SummerCrewBuilder({
   myType,
+  myName,
   sharedType,
+  sharedName,
+  onResolveMyName,
   onTrack,
 }: {
   myType: SummerTypeKey | null;
+  myName: string;
   sharedType: SummerTypeKey | null;
+  sharedName: string;
+  onResolveMyName: () => Promise<string>;
   onTrack: (name: string, params?: Record<string, string | number>) => void;
 }) {
   const [friends, setFriends] = useState<FriendType[]>(getSavedFriends);
@@ -295,11 +306,16 @@ export function SummerCrewBuilder({
   const members = useMemo<CrewMember[]>(
     () => [
       ...(myType
-        ? [{ id: "me", name: "나", type: myType, isMe: true } as CrewMember]
+        ? [{
+            id: "me",
+            name: myName || "나",
+            type: myType,
+            isMe: true,
+          } as CrewMember]
         : []),
       ...friends.map((friend) => ({ ...friend, isMe: false })),
     ],
-    [friends, myType],
+    [friends, myName, myType],
   );
   const [selectedIds, setSelectedIds] = useState<string[]>(() => [
     ...(myType ? ["me"] : []),
@@ -350,7 +366,7 @@ export function SummerCrewBuilder({
   };
 
   const openAddFriend = () => {
-    setFriendName("");
+    setFriendName(receivedType ? sharedName : "");
     setFriendLink("");
     setAddError("");
     setAddOpen(true);
@@ -361,7 +377,8 @@ export function SummerCrewBuilder({
 
   const addFriend = () => {
     const name = friendName.trim().replace(/\s+/g, " ").slice(0, 12);
-    const type = receivedType ?? parseFriendTypeLink(friendLink);
+    const parsedLink = parseFriendTypeLink(friendLink);
+    const type = receivedType ?? parsedLink?.type ?? null;
     if (name.length < 1) {
       setAddError("친구 이름을 입력해 주세요.");
       return;
@@ -412,6 +429,7 @@ export function SummerCrewBuilder({
   const shareCrew = async () => {
     if (shareState === "sharing" || selectedMembers.length < 2) return;
     setShareState("sharing");
+    const resolvedMyName = await onResolveMyName();
     const url = new URL(window.location.href);
     url.searchParams.set("tab", "type");
     url.searchParams.set(
@@ -419,10 +437,11 @@ export function SummerCrewBuilder({
       selectedMembers.map((member) => member.type).join(","),
     );
     url.searchParams.delete("summerType");
+    url.searchParams.delete("summerName");
     const memberNames = selectedMembers
       .map(
         (member) =>
-          `${member.name}(${SUMMER_TYPE_RESULTS[member.type].shortName})`,
+          `${member.isMe && resolvedMyName ? resolvedMyName : member.name}(${SUMMER_TYPE_RESULTS[member.type].shortName})`,
       )
       .join(" × ");
     const text = [
@@ -673,7 +692,12 @@ export function SummerCrewBuilder({
                 inputMode="url"
                 placeholder="https://.../?summerType=..."
                 onChange={(event) => {
-                  setFriendLink(event.target.value);
+                  const nextLink = event.target.value;
+                  const parsedLink = parseFriendTypeLink(nextLink);
+                  setFriendLink(nextLink);
+                  if (parsedLink?.name && !friendName.trim()) {
+                    setFriendName(parsedLink.name);
+                  }
                   setAddError("");
                 }}
               />

@@ -68,6 +68,11 @@ import {
   updateItem,
 } from "./api";
 import { initializeAnonymousUser } from "./anonymous-user";
+import {
+  getSharedDisplayName,
+  getTossUserDisplayName,
+  normalizeUserDisplayName,
+} from "./toss-user-profile";
 import { AiBriefingCard } from "./components/AiBriefingCard";
 import { CrowdHighlightsCarousel } from "./components/CrowdHighlightsCarousel";
 import { PlaceIntelligenceCard } from "./components/PlaceIntelligenceCard";
@@ -727,6 +732,7 @@ function HomePage({
     expectedPeople: 4,
     creatorName: "",
   });
+  const [tossDisplayName, setTossDisplayName] = useState("");
   const [expectedPeopleDraft, setExpectedPeopleDraft] = useState("4");
   const selectedCustomPlaceId = selectedCustomPlace?.id ?? "";
   const selectedCustomPlaceName = selectedCustomPlace?.name ?? "";
@@ -738,6 +744,7 @@ function HomePage({
   const sharedSummerType = isSummerTypeKey(sharedSummerTypeValue)
     ? sharedSummerTypeValue
     : null;
+  const sharedSummerName = getSharedDisplayName(window.location.search);
   const [mySummerType, setMySummerType] =
     useState<SummerTypeKey | null>(getSavedSummerType);
   const [activeTab, setActiveTab] = useState<HomeTab>(() =>
@@ -929,6 +936,7 @@ function HomePage({
       const url = new URL(window.location.href);
       url.searchParams.delete("tab");
       url.searchParams.delete("summerType");
+      url.searchParams.delete("summerName");
       window.history.replaceState(
         window.history.state,
         "",
@@ -1112,6 +1120,7 @@ function HomePage({
     if (tab === "home") {
       url.searchParams.delete("tab");
       url.searchParams.delete("summerType");
+      url.searchParams.delete("summerName");
     } else {
       url.searchParams.set("tab", tab);
     }
@@ -1130,10 +1139,25 @@ function HomePage({
         ?.scrollTo({ top: 0, behavior: "smooth" });
     });
   };
+  const resolveTossDisplayName = async () => {
+    if (tossDisplayName) return tossDisplayName;
+    const displayName = await getTossUserDisplayName();
+    if (!displayName) return "";
+    setTossDisplayName(displayName);
+    return displayName;
+  };
   const openCreateSheet = () => {
     setCreateStep(1);
     setError("");
     setCreateOpen(true);
+    void resolveTossDisplayName().then((displayName) => {
+      if (!displayName) return;
+      setForm((current) =>
+        current.creatorName.trim()
+          ? current
+          : { ...current, creatorName: displayName },
+      );
+    });
   };
   const startCreateAtPlace = (place: Place) => {
     const waterActivity = ["waterpark", "beach", "valley"].includes(
@@ -1295,10 +1319,15 @@ function HomePage({
   const shareSummerType = async (
     result: SummerTypeResult,
   ): Promise<"shared" | "copied"> => {
-    const deepLink = `intoss://${APP_NAME}?summerType=${result.key}`;
-    const webLink = `${window.location.origin}/?summerType=${result.key}`;
+    const displayName = normalizeUserDisplayName(
+      await resolveTossDisplayName(),
+    );
+    const shareParams = new URLSearchParams({ summerType: result.key });
+    if (displayName) shareParams.set("summerName", displayName);
+    const deepLink = `intoss://${APP_NAME}?${shareParams.toString()}`;
+    const webLink = `${window.location.origin}/?${shareParams.toString()}`;
     const message = [
-      `🌞 내 여름 준비 캐릭터는 ‘${result.name}’`,
+      `🌞 ${displayName ? `${displayName}님의` : "내"} 여름 준비 캐릭터는 ‘${result.name}’`,
       `시그니처 준비물은 ${result.signatureItem}!`,
       "너는 8종 캐릭터 중 어떤 유형인지 1분 만에 확인해봐 👇",
     ].join("\n");
@@ -1585,13 +1614,17 @@ function HomePage({
           </header>
           <SummerTypeTest
             sharedType={sharedSummerType}
+            sharedName={sharedSummerName}
             onTrack={track}
             onShare={shareSummerType}
             onResultChange={setMySummerType}
           />
           <SummerCrewBuilder
             myType={mySummerType}
+            myName={tossDisplayName}
             sharedType={sharedSummerType}
+            sharedName={sharedSummerName}
+            onResolveMyName={resolveTossDisplayName}
             onTrack={track}
           />
         </section>
@@ -2656,10 +2689,13 @@ function OutingPage({
 
   const handleAiShare = async () => {
     if (!bundle || !aiBriefing) return;
+    const viewerName = bundle.participants.find(
+      (participant) => participant.id === session?.participantId,
+    )?.name;
     const deepLink = `intoss://${APP_NAME}/outing/${bundle.outing.id}?invite=${encodeURIComponent(bundle.outing.inviteCode)}`;
     const webLink = `${window.location.origin}/outing/${bundle.outing.id}?invite=${encodeURIComponent(bundle.outing.inviteCode)}`;
     const message = [
-      `☀️ ${bundle.outing.title} AI 준비 브리핑`,
+      `☀️ ${viewerName ? `${viewerName}님이 보낸 ` : ""}${bundle.outing.title} AI 준비 브리핑`,
       `“${aiBriefing.headline}”`,
       aiBriefing.shareCaption,
       "같이 확인하고 하나씩 맡아줘 👇",
@@ -2694,6 +2730,9 @@ function OutingPage({
 
   const handleShare = async () => {
     if (!bundle) return;
+    const viewerName = bundle.participants.find(
+      (participant) => participant.id === session?.participantId,
+    )?.name;
     const deepLink = `intoss://${APP_NAME}/outing/${bundle.outing.id}?invite=${encodeURIComponent(bundle.outing.inviteCode)}`;
     const webLink = `${window.location.origin}/outing/${bundle.outing.id}?invite=${encodeURIComponent(bundle.outing.inviteCode)}`;
     const readyCount = bundle.items.filter((item) => item.done).length;
@@ -2708,7 +2747,8 @@ function OutingPage({
             .join(" · ")} 중 하나 맡아줄래?`
         : "준비 상황 같이 확인해줘!";
     const message = [
-      `🏖️ ${bundle.outing.title}, 같이 챙길래?`,
+      `🏖️ ${viewerName ? `${viewerName}님이 초대했어요` : bundle.outing.title}`,
+      ...(viewerName ? [`${bundle.outing.title}, 같이 챙길래?`] : []),
       `${dayLabel ? `${dayLabel} · ` : ""}준비 ${readyCount}/${bundle.items.length}`,
       ask,
       "하나 맡고 준비 완료까지 같이 가요 👇",

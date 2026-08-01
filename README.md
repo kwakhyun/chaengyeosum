@@ -203,6 +203,9 @@ npx wrangler secret put SEOUL_OPEN_DATA_API_KEY
 | `OPENAI_API_KEY` | AI 기능 사용 시 필수 | 출발 전 브리핑과 검증된 여름 행사 검색 |
 | `SEOUL_OPEN_DATA_API_KEY` | 선택 | 서울시 지원 장소의 공식 실시간 혼잡 정보 |
 | `VITE_API_BASE_URL` | 선택 | 클라이언트가 사용할 API 주소 재정의 |
+| `VITE_TOSS_USER_DATA_KEY` | 이름 자동 입력 시 필수 | 콘솔의 ‘유저정보 불러오기’에서 이름 항목으로 발급받은 `cud_` 키 |
+
+`VITE_TOSS_USER_DATA_KEY`는 비밀키가 아니라 클라이언트 SDK가 동의문을 찾는 식별자입니다. 이름은 토스의 개인정보 제3자 제공 동의가 완료된 경우에만 현재 세션에서 사용하며, 동의 취소·미지원 환경에서는 기존 직접 입력 UI를 유지합니다.
 
 키가 없거나 외부 API가 지원하지 않는 장소에서는 핵심 모임·준비 기능이 유지되고, 해당 기능만 폴백 데이터 또는 안내 상태로 전환됩니다.
 

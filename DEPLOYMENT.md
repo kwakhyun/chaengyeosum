@@ -49,10 +49,12 @@ WORKER_API_URL=https://chaengyeosum-api.kwakhyun-miniapps.workers.dev npm run te
 ## 앱인토스 번들 연결
 
 ```bash
-VITE_API_BASE_URL=https://chaengyeosum-api.kwakhyun-miniapps.workers.dev/api npm run build
+VITE_API_BASE_URL=https://chaengyeosum-api.kwakhyun-miniapps.workers.dev/api \
+VITE_TOSS_USER_DATA_KEY=cud_콘솔에서_복사한_키 \
+npm run build
 ```
 
-상대 경로 `/api`로 빌드하면 앱인토스 운영 환경에서 Worker에 연결되지 않으므로 반드시 환경 변수를 지정한다.
+상대 경로 `/api`로 빌드하면 앱인토스 운영 환경에서 Worker에 연결되지 않으므로 API 주소를 반드시 지정한다. 사용자 이름 자동 입력을 사용하려면 콘솔의 `유저정보 불러오기`에서 이름 항목을 등록하고 발급된 `cud_` 키도 함께 지정한다.
 
 ## 운영 명령
 

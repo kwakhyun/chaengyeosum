@@ -320,11 +320,13 @@ function resolveResult(answers: SummerTypeKey[]) {
 
 export function SummerTypeTest({
   sharedType,
+  sharedName,
   onTrack,
   onShare,
   onResultChange,
 }: {
   sharedType: SummerTypeKey | null;
+  sharedName: string;
   onTrack: (name: string, params?: Record<string, string | number>) => void;
   onShare: (result: SummerTypeResult) => Promise<"shared" | "copied">;
   onResultChange: (result: SummerTypeKey) => void;
@@ -348,7 +350,7 @@ export function SummerTypeTest({
   const entryCopy = sharedResult
     ? {
         label: "친구 결과 도착",
-        title: `친구는 ‘${sharedResult.shortName}’`,
+        title: `${sharedName ? `${sharedName}님은` : "친구는"} ‘${sharedResult.shortName}’`,
         description: "나는 어떤 여름 준비 캐릭터인지 1분 만에 확인해요.",
         action: "나도 테스트하기",
       }
