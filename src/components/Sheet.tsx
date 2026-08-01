@@ -13,6 +13,7 @@ export function Sheet({
   onClose,
   children,
   resetScrollKey,
+  className,
 }: {
   open: boolean;
   title: string;
@@ -20,6 +21,7 @@ export function Sheet({
   onClose: () => void;
   children: ReactNode;
   resetScrollKey?: string | number;
+  className?: string;
 }) {
   const titleId = useId();
   const descriptionId = useId();
@@ -98,7 +100,7 @@ export function Sheet({
       />
       <section
         ref={dialogRef}
-        className="sheet"
+        className={`sheet${className ? ` ${className}` : ""}`}
         role="dialog"
         aria-modal="true"
         aria-labelledby={titleId}

@@ -476,6 +476,7 @@ export function SummerTypeTest({
         open={open}
         onClose={() => setOpen(false)}
         resetScrollKey={showResult ? `result-${resultKey}` : questionIndex}
+        className={`summer-type-sheet ${showResult ? "is-result" : "is-quiz"}`}
         title={showResult ? "나의 여름 준비 캐릭터" : "여름 모임 성향 테스트"}
         description={
           showResult

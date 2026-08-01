@@ -2115,6 +2115,15 @@ button:disabled {
   gap: 8px;
 }
 
+.sheet.summer-type-sheet.is-quiz {
+  max-height: min(94dvh, 760px);
+  overscroll-behavior: contain;
+}
+
+.sheet.summer-type-sheet.is-quiz > p {
+  margin-bottom: 14px;
+}
+
 .summer-type-progress > span {
   color: #3182f6;
   font-size: 12px;
@@ -2147,6 +2156,51 @@ button:disabled {
   background: #eef5fb;
   box-shadow: 0 10px 24px rgb(31 76 128 / 10%);
   animation: summer-type-scene-in 260ms ease both;
+}
+
+.summer-type-sheet.is-quiz .summer-type-question-visual {
+  height: clamp(104px, 18dvh, 132px);
+  margin-top: 10px;
+  border-radius: 18px;
+}
+
+.summer-type-sheet.is-quiz .summer-type-quiz fieldset {
+  margin-top: 12px;
+}
+
+.summer-type-sheet.is-quiz .summer-type-quiz legend {
+  font-size: 19px;
+  line-height: 1.28;
+}
+
+.summer-type-sheet.is-quiz .summer-type-quiz fieldset > div {
+  gap: 6px;
+  margin-top: 10px;
+}
+
+.summer-type-sheet.is-quiz .summer-type-quiz fieldset button {
+  min-height: 52px;
+  grid-template-columns: 30px minmax(0, 1fr) 16px;
+  gap: 9px;
+  padding: 8px 10px;
+  border-radius: 15px;
+}
+
+.summer-type-sheet.is-quiz .summer-type-quiz fieldset button > span {
+  width: 30px;
+  height: 30px;
+  border-radius: 10px;
+}
+
+.summer-type-sheet.is-quiz .summer-type-quiz fieldset button > strong {
+  font-size: 14px;
+  line-height: 1.32;
+}
+
+.summer-type-sheet.is-quiz .summer-type-back {
+  min-height: 36px;
+  margin-top: 4px;
+  font-size: 13px;
 }
 
 .summer-type-question-visual img {
@@ -6362,6 +6416,79 @@ button.ai-briefing-action {
 
   .form-grid {
     grid-template-columns: 1fr;
+  }
+}
+
+@media (max-height: 740px) {
+  .sheet.summer-type-sheet.is-quiz {
+    max-height: calc(100dvh - 10px);
+    padding: 14px 16px 12px;
+  }
+
+  .sheet.summer-type-sheet.is-quiz h2 {
+    font-size: 19px;
+  }
+
+  .sheet.summer-type-sheet.is-quiz > p {
+    margin: 3px 0 8px;
+    font-size: 12px;
+  }
+
+  .summer-type-sheet.is-quiz .sheet-close {
+    top: 10px;
+    right: 12px;
+    width: 38px;
+    height: 38px;
+  }
+
+  .summer-type-sheet.is-quiz .summer-type-progress {
+    gap: 4px;
+  }
+
+  .summer-type-sheet.is-quiz .summer-type-progress > span {
+    font-size: 11px;
+  }
+
+  .summer-type-sheet.is-quiz .summer-type-progress > div {
+    height: 5px;
+  }
+
+  .summer-type-sheet.is-quiz .summer-type-question-visual {
+    height: 88px;
+    margin-top: 7px;
+    border-radius: 15px;
+  }
+
+  .summer-type-sheet.is-quiz .summer-type-question-visual figcaption {
+    right: 10px;
+    bottom: 8px;
+    left: 10px;
+    font-size: 11px;
+  }
+
+  .summer-type-sheet.is-quiz .summer-type-quiz fieldset {
+    margin-top: 9px;
+  }
+
+  .summer-type-sheet.is-quiz .summer-type-quiz legend {
+    font-size: 17px;
+    line-height: 1.22;
+  }
+
+  .summer-type-sheet.is-quiz .summer-type-quiz fieldset > div {
+    gap: 5px;
+    margin-top: 7px;
+  }
+
+  .summer-type-sheet.is-quiz .summer-type-quiz fieldset button {
+    min-height: 46px;
+    padding-block: 6px;
+  }
+
+  .summer-type-sheet.is-quiz .summer-type-back {
+    min-height: 30px;
+    margin-top: 1px;
+    font-size: 12px;
   }
 }
 
