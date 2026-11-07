@@ -320,8 +320,8 @@ function OutingList({
 /** 요약 API가 없는 예전 서버에서도 동작하도록 모임별 조회로 대신해요. */
 async function loadOutingSummaries(
   sessions: SavedSession[],
-): Promise<OutingSummary[]> {
-  if (sessions.length === 0) return [];
+): Promise<{ summaries: OutingSummary[]; missing: string[] }> {
+  if (sessions.length === 0) return { summaries: [], missing: [] };
   try {
     const result = await getOutingSummaries(
       sessions.map((session) => ({
@@ -329,7 +329,7 @@ async function loadOutingSummaries(
         token: session.token,
       })),
     );
-    return result.summaries;
+    return { summaries: result.summaries, missing: result.missing ?? [] };
   } catch {
     const results = await Promise.allSettled(
       sessions.map(async (saved): Promise<OutingSummary> => {
@@ -351,11 +351,28 @@ async function loadOutingSummaries(
         };
       }),
     );
-    return results.flatMap((result) =>
-      result.status === "fulfilled" ? [result.value] : [],
-    );
+    return {
+      summaries: results.flatMap((result) =>
+        result.status === "fulfilled" ? [result.value] : [],
+      ),
+      missing: [],
+    };
   }
 }
+
+function sameSessionList(left: SavedSession[], right: SavedSession[]) {
+  return (
+    left.length === right.length &&
+    left.every(
+      (session, index) =>
+        session.outingId === right[index].outingId &&
+        session.token === right[index].token,
+    )
+  );
+}
+
+// 로컬 참여 토큰을 토스 익명 사용자와 연결하는 일은 앱 실행마다 한 번이면 충분해요.
+let linkedAnonymousKey = "";
 
 export default function App() {
   const [outingId, setOutingId] = useState(currentOutingId);
@@ -542,7 +559,8 @@ function HomePage({
   }, [crowdHighlights, places]);
 
   useEffect(() => {
-    if (!anonymousUser) return;
+    if (!anonymousUser || linkedAnonymousKey === anonymousUser.key) return;
+    linkedAnonymousKey = anonymousUser.key;
     let cancelled = false;
     const localSessions = anonymousUser.canLinkLocalSessions
       ? getSavedSessions()
@@ -551,15 +569,18 @@ function HomePage({
     loadOutingSummaries(localSessions)
       .then(() => listMySessions())
       .then((result) => {
+        // 화면을 떠났더라도 복구한 목록은 저장해 두고, 다음 홈 진입에서 그대로 써요.
+        const next = anonymousUser.canLinkLocalSessions
+          ? mergeSessions(result.sessions)
+          : replaceSessions(result.sessions);
         if (cancelled) return;
-        setSessions(
-          anonymousUser.canLinkLocalSessions
-            ? mergeSessions(result.sessions)
-            : replaceSessions(result.sessions),
+        setSessions((current) =>
+          sameSessionList(current, next) ? current : next,
         );
       })
       .catch(() => {
-        // 식별키 동기화가 실패해도 기존 로컬 세션으로 계속 이용해요.
+        // 식별키 동기화가 실패하면 다음 홈 진입에서 다시 시도해요.
+        linkedAnonymousKey = "";
       });
     return () => {
       cancelled = true;
@@ -730,8 +751,16 @@ function HomePage({
       return;
     }
     let cancelled = false;
-    void loadOutingSummaries(sessions).then((summaries) => {
+    void loadOutingSummaries(sessions).then(({ summaries, missing }) => {
       if (cancelled) return;
+      if (missing.length > 0) {
+        // 삭제됐거나 보관 기간이 지나 서버에서 사라진 모임은 목록에서도 지워요.
+        const missingIds = new Set(missing);
+        missing.forEach((id) => removeSession(id));
+        setSessions((current) =>
+          current.filter((session) => !missingIds.has(session.outingId)),
+        );
+      }
       setOutingSummaries(
         new Map(summaries.map((summary) => [summary.outingId, summary])),
       );
@@ -844,6 +873,12 @@ function HomePage({
   }, [customItems.length]);
 
   const itemCount = selectedItemKeys.length + customItems.length;
+  // 추천 장소 모드에서는 목록에 있는 장소만, 직접 검색 모드에서는 고른 장소가 있어야 해요.
+  const hasValidPlace =
+    Boolean(form.placeId) &&
+    (customPlaceMode
+      ? selectedCustomPlace != null
+      : places.some((place) => place.id === form.placeId));
   const selectedActivity =
     activities.find((activity) => activity.key === form.activityType) ?? null;
   const selectedPlaceName =
@@ -963,7 +998,8 @@ function HomePage({
     setForm((current) => ({
       ...current,
       title: preset.title.slice(0, 32),
-      placeId: preset.placeId ?? current.placeId,
+      // 추천에 장소가 없으면 직접 검색했던 장소 대신 마지막 추천 장소로 돌아가요.
+      placeId: preset.placeId ?? presetPlaceIdRef.current,
       activityType: preset.activityType,
     }));
     openCreateSheet();
@@ -1036,7 +1072,7 @@ function HomePage({
     }
     if (createStep === 2) {
       updateExpectedPeople(Number(expectedPeopleDraft));
-      if (!form.placeId || (customPlaceMode && selectedCustomPlace == null)) {
+      if (!hasValidPlace) {
         setError("함께 갈 장소를 선택해 주세요.");
         return;
       }
@@ -2117,7 +2153,7 @@ function HomePage({
                   places.length === 0 ||
                   itemOptions.length === 0 ||
                   itemCount === 0 ||
-                  (customPlaceMode && selectedCustomPlace == null)
+                  !hasValidPlace
                 }
               >
                 {submitting ? "모임을 만들고 있어요…" : "모임 만들기"}

@@ -6392,11 +6392,18 @@ button.ai-briefing-action {
   box-shadow: 0 -8px 20px rgb(46 68 91 / 6%);
 }
 
-.outing-app .toast {
+/* 하단 작업 버튼이 보이고 시트가 닫혀 있을 때만 토스트를 버튼 위로 올려요. */
+.toast.toast--above-dock {
   bottom: 112px;
 }
 
+.toast.toast--above-dock-tall {
+  bottom: 156px;
+}
+
+/* 토스트가 아래 버튼과 시트 항목의 탭을 가로채지 않게 해요. */
 .toast {
+  pointer-events: none;
   text-align: left;
 }
 
@@ -6678,10 +6685,9 @@ button.ai-briefing-action {
   height: 17px;
 }
 
+/* 탭 바와 겹치지 않도록 상단에 고정하지 않고 흐름 안에서 보여줘요. */
 .connection-banner {
-  position: sticky;
-  z-index: 40;
-  top: 0;
+  position: relative;
   display: flex;
   align-items: center;
   justify-content: space-between;
@@ -6867,9 +6873,42 @@ button.last-check-card b svg {
   font-size: 13px;
 }
 
+.outing-detail-tabs button span {
+  white-space: nowrap;
+  word-break: keep-all;
+}
+
+/* 새 소식 배지는 아이콘 모서리에 띄워 좁은 화면에서도 탭 이름이 줄바꿈되지 않게 해요. */
 .outing-detail-tabs button small.is-new {
+  position: absolute;
+  top: 5px;
+  left: calc(50% - 30px);
+  min-width: 16px;
+  height: 16px;
+  padding: 0 4px;
   background: #f04452;
+  box-shadow: 0 0 0 2px #fff;
   color: #fff;
+  font-size: 10px;
+}
+
+/* 고정된 탭 바 아래로 스크롤 목표가 가려지지 않게 해요. */
+.packing-section,
+[id^="packing-item-"] {
+  scroll-margin-top: 80px;
+}
+
+.detail-tabs-sentinel {
+  height: 0;
+}
+
+/* 모임 수정 시트의 저장 버튼은 장소 목록이 길어도 항상 보여요. */
+.outing-edit-actions {
+  margin-bottom: 0;
+}
+
+.outing-edit-actions .form-error {
+  margin: 0 0 4px;
 }
 
 .outing-participants-card strong em {
@@ -6892,14 +6931,14 @@ button.last-check-card b svg {
 }
 
 .activity-reactions button {
-  min-width: 36px;
-  min-height: 32px;
-  padding: 0 8px;
+  min-width: 44px;
+  min-height: 40px;
+  padding: 0 9px;
   background: transparent;
-  color: #b0b8c1;
+  color: #8b95a1;
 }
 
-.activity-reactions button.has-count {
+.activity-reactions button.has-count:not([aria-pressed="true"]) {
   background: #f2f5f8;
   color: #6b7684;
 }

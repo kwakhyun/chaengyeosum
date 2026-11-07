@@ -60,12 +60,13 @@ export function PlacePicker({
   value,
   onChange,
   userLocation,
-  label = "추천 장소",
+  label,
 }: {
   places: Place[];
   value: string;
   onChange: (place: Place) => void;
   userLocation?: { latitude: number; longitude: number } | null;
+  /** fieldset 바깥에서 쓸 때만 그룹 이름을 따로 붙여요. */
   label?: string;
 }) {
   const sorted = userLocation
@@ -79,7 +80,7 @@ export function PlacePicker({
   }
 
   return (
-    <div className="place-card-picker" role="radiogroup" aria-label={label}>
+    <div className="place-card-picker" role="group" aria-label={label}>
       {sorted.map(({ place, distance }) => {
         const selected = place.id === value;
         const categoryLabel = placeCategoryLabel(place.category);
@@ -87,8 +88,7 @@ export function PlacePicker({
           <button
             className={`place-card-option${selected ? " is-selected" : ""}`}
             type="button"
-            role="radio"
-            aria-checked={selected}
+            aria-pressed={selected}
             key={place.id}
             onClick={() => onChange(place)}
           >

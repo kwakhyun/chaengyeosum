@@ -214,11 +214,20 @@ export function useToast() {
   return { toast, showToast };
 }
 
-export function Toast({ toast }: { toast: ToastState | null }) {
+export function Toast({
+  toast,
+  placement = "default",
+}: {
+  toast: ToastState | null;
+  /** 하단 작업 버튼이 보일 때 그 위로 띄워요. */
+  placement?: "default" | "above-dock" | "above-dock-tall";
+}) {
   if (!toast) return null;
   return (
     <div
-      className={`toast toast--${toast.tone}`}
+      className={`toast toast--${toast.tone}${
+        placement === "default" ? "" : ` toast--${placement}`
+      }`}
       role={toast.tone === "error" ? "alert" : "status"}
       aria-live={toast.tone === "error" ? "assertive" : "polite"}
       key={toast.id}

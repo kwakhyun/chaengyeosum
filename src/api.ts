@@ -219,7 +219,8 @@ export async function getOutingIfChanged(
     response = await apiFetch(
       `/outings/${encodeURIComponent(outingId)}${query}`,
       {
-        cache: "no-store",
+        // cache 옵션을 따로 주지 않아야 WebView가 CORS 사전 요청 결과를 재사용해요.
+        // If-None-Match를 직접 넣으면 브라우저 캐시 대신 304가 그대로 전달돼요.
         headers: options.etag ? { "if-none-match": options.etag } : {},
       },
       options.token,
@@ -266,10 +267,14 @@ export function resetInviteCode(outingId: string, token: string) {
 export function getOutingSummaries(
   sessions: Array<{ outingId: string; token: string }>,
 ) {
-  return request<{ summaries: OutingSummary[] }>("/outing-summaries", {
-    method: "POST",
-    body: JSON.stringify({ sessions: sessions.slice(0, 30) }),
-  });
+  // missing: 서버에서 사라진(삭제·보관 기간 만료) 모임 ID예요. 예전 서버는 보내지 않아요.
+  return request<{ summaries: OutingSummary[]; missing?: string[] }>(
+    "/outing-summaries",
+    {
+      method: "POST",
+      body: JSON.stringify({ sessions: sessions.slice(0, 30) }),
+    },
+  );
 }
 
 export function deleteOuting(outingId: string, token: string) {
@@ -290,7 +295,9 @@ export function createAiBriefing(outingId: string, token: string) {
 
 export function getPlaceIntelligence(outingId: string, token: string) {
   return request<PlaceIntelligenceResponse>(
-    `/outings/${encodeURIComponent(outingId)}/place-intelligence`,
+    // basis=outing: 오늘이 아닌 모임은 모임 시간 기준 예상치를 받아요.
+    // 예전 앱은 이 값을 보내지 않아 지금 기준 혼잡도를 그대로 받아요.
+    `/outings/${encodeURIComponent(outingId)}/place-intelligence?basis=outing`,
     {},
     token,
   );

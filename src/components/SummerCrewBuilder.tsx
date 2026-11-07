@@ -236,6 +236,10 @@ export function suggestOutingForCrew(recommendedPlace: string): OutingSuggestion
     return pick("songjeong-beach", "water-play");
   }
   if (text.includes("한강")) return pick("yeouido-hangang", "picnic");
+  // "숲속 짚라인 원정"처럼 '숲'이 들어간 여행 코스는 서울숲 피크닉으로 보내지 않아요.
+  if (text.includes("드라이브") || text.includes("제주") || text.includes("짚라인")) {
+    return pick(undefined, "trip");
+  }
   if (text.includes("서울숲") || text.includes("숲") || text.includes("호수")) {
     return pick("seoul-forest", "picnic");
   }
@@ -244,9 +248,6 @@ export function suggestOutingForCrew(recommendedPlace: string): OutingSuggestion
   }
   if (text.includes("페스티벌") || text.includes("야시장")) {
     return pick(undefined, "festival");
-  }
-  if (text.includes("드라이브") || text.includes("제주") || text.includes("짚라인")) {
-    return pick(undefined, "trip");
   }
   return pick(undefined, "picnic");
 }

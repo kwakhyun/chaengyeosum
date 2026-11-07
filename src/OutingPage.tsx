@@ -43,6 +43,7 @@ import {
   updateItem,
   updateOuting,
 } from "./api";
+import { waitForAnonymousUser } from "./anonymous-user";
 import { avatarSrc, summerTypeAvatarKey } from "./avatars";
 import { AiBriefingCard } from "./components/AiBriefingCard";
 import { PlaceIntelligenceCard } from "./components/PlaceIntelligenceCard";
@@ -243,8 +244,9 @@ function ProgressShareCard({ bundle }: { bundle: OutingBundle }) {
     bundle.items.length > 0
       ? Math.round((readyCount / bundle.items.length) * 100)
       : 0;
+  const isPast = isOutingPast(bundle);
   const day = daysUntil(bundle.outing.startsAt);
-  const dayLabel = day === 0 ? "오늘" : day > 0 ? `D-${day}` : "다녀온 모임";
+  const dayLabel = isPast ? "다녀온 모임" : day === 0 ? "오늘" : `D-${day}`;
 
   return (
     <article className="progress-share-card">
@@ -255,9 +257,11 @@ function ProgressShareCard({ bundle }: { bundle: OutingBundle }) {
       <h3>{bundle.outing.title}</h3>
       <p>
         {readyCount}/{bundle.items.length}개 준비 완료
-        {unassigned.length > 0
-          ? ` · ${unassigned.length}개 주인 찾는 중`
-          : " · 담당자 모두 확정"}
+        {isPast
+          ? ` · ${bundle.participants.length}명이 함께했어요`
+          : unassigned.length > 0
+            ? ` · ${unassigned.length}개 주인 찾는 중`
+            : " · 담당자 모두 확정"}
       </p>
       <div
         className="share-progress-track"
@@ -281,12 +285,14 @@ function ProgressShareCard({ bundle }: { bundle: OutingBundle }) {
           ))}
         </div>
         <span>
-          {unassigned.length > 0
-            ? `${unassigned
-                .slice(0, 2)
-                .map((item) => item.label)
-                .join("·")} 맡아줄래?`
-            : "준비 상황 같이 확인해요"}
+          {isPast
+            ? "함께 챙긴 기록이에요"
+            : unassigned.length > 0
+              ? `${unassigned
+                  .slice(0, 2)
+                  .map((item) => item.label)
+                  .join("·")} 맡아줄래?`
+              : "준비 상황 같이 확인해요"}
         </span>
       </div>
     </article>
@@ -313,8 +319,14 @@ export function OutingPage({
   const [loadError, setLoadError] = useState("");
   const [loadErrorCode, setLoadErrorCode] = useState("");
   const [connectionIssue, setConnectionIssue] = useState(false);
+  // 삭제됐거나 보관 기간(180일)이 지나 서버에서 사라진 모임이에요.
+  const [outingGone, setOutingGone] = useState(false);
   const etagRef = useRef<string | null>(null);
   const pendingCountRef = useRef(0);
+  // 화면을 로컬에서 바꿀 때마다 올려요. 그 사이 도착한 이전 조회 결과는 버려요.
+  const localVersionRef = useRef(0);
+  // 마지막으로 실패한 조회가 초대 코드를 함께 보냈는지 기억해요.
+  const lastRequestSentInviteRef = useRef(false);
   const pendingKeysRef = useRef<Set<string>>(new Set());
   const [pendingKeys, setPendingKeys] = useState<ReadonlySet<string>>(
     new Set(),
@@ -360,6 +372,7 @@ export function OutingPage({
   const [feedSeenAt, setFeedSeenAt] = useState(() => readStorage(feedSeenKey));
   const previousReadyCount = useRef<number | null>(null);
   const detailTabsRef = useRef<HTMLElement>(null);
+  const detailTabsSentinelRef = useRef<HTMLDivElement>(null);
   const packingSectionRef = useRef<HTMLElement>(null);
 
   useEffect(() => {
@@ -372,17 +385,27 @@ export function OutingPage({
 
   const refresh = useCallback(
     async ({ force = false }: { force?: boolean } = {}) => {
+      // 참여 토큰이 없는 세션(다른 기기에서 복구한 모임 등)은 익명 키로만 확인돼요.
+      if (!sessionRef.current?.token) await waitForAnonymousUser();
       const activeSession = sessionRef.current;
+      const inviteCode = activeSession
+        ? undefined
+        : (inviteCodeRef.current ?? undefined);
+      // force는 If-None-Match 생략만 뜻해요. 적용 여부는 아래 버전 확인으로 정해요.
+      const versionAtRequest = localVersionRef.current;
       try {
         const result = await getOutingIfChanged(outingId, {
           token: activeSession?.token,
-          inviteCode: activeSession
-            ? undefined
-            : (inviteCodeRef.current ?? undefined),
+          inviteCode,
           etag: force ? null : etagRef.current,
         });
-        // 낙관적으로 바꾼 화면이 있는 동안에는 덮어쓰지 않고, 다음 조회에서 다시 받아요.
-        if (result.changed && (force || pendingCountRef.current === 0)) {
+        // 낙관적으로 바꾼 화면이 있거나, 요청 뒤에 화면이 바뀌었다면 덮어쓰지 않아요.
+        // 변경이 끝나면 다시 조회하므로 버린 결과는 곧 맞춰져요.
+        if (
+          result.changed &&
+          pendingCountRef.current === 0 &&
+          localVersionRef.current === versionAtRequest
+        ) {
           etagRef.current = result.etag;
           setBundle(result.bundle);
         }
@@ -390,7 +413,18 @@ export function OutingPage({
         setConnectionIssue(false);
         return true;
       } catch (refreshError) {
+        lastRequestSentInviteRef.current = Boolean(inviteCode);
         const message = errorMessage(refreshError, "모임을 불러오지 못했어요.");
+        if (
+          refreshError instanceof ApiError &&
+          refreshError.status === 404 &&
+          refreshError.code === "not_found"
+        ) {
+          // 다시 시도해도 열 수 없는 모임이라 홈 목록에서도 지워요.
+          removeSession(outingId);
+          setOutingGone(true);
+          return false;
+        }
         const gone =
           refreshError instanceof ApiError &&
           (refreshError.status === 403 || refreshError.status === 404);
@@ -427,7 +461,7 @@ export function OutingPage({
       });
   }, []);
 
-  const canPoll = Boolean(session || bundle?.viewer);
+  const canPoll = !outingGone && Boolean(session || bundle?.viewer);
   useEffect(() => {
     if (!canPoll) return;
     const refreshWhenVisible = () => {
@@ -494,6 +528,13 @@ export function OutingPage({
     previousReadyCount.current = nextReadyCount;
   }, [bundle]);
 
+  // 친구가 남은 준비물을 모두 맡으면 "하나만 맡아볼까요?" 시트를 닫아 둬요.
+  useEffect(() => {
+    if (claimOpen && bundle && !bundle.items.some((item) => item.owner == null)) {
+      setClaimOpen(false);
+    }
+  }, [bundle, claimOpen]);
+
   const latestEventAt = bundle?.events?.[0]?.createdAt ?? "";
   useEffect(() => {
     if (detailTab !== "activity" || !latestEventAt) return;
@@ -519,6 +560,7 @@ export function OutingPage({
     if (pendingKeysRef.current.has(key)) return false;
     setKeyPending(key, true);
     pendingCountRef.current += 1;
+    localVersionRef.current += 1;
     setBundle((current) => (current ? optimistic(current) : current));
     let succeeded = false;
     try {
@@ -538,6 +580,7 @@ export function OutingPage({
     if (busy) return false;
     setBusy(true);
     pendingCountRef.current += 1;
+    localVersionRef.current += 1;
     try {
       await mutate(sessionRef.current?.token ?? "");
       return true;
@@ -567,9 +610,21 @@ export function OutingPage({
 
   if (loading) return <LoadingScreen />;
 
+  if (outingGone) {
+    return (
+      <StateScreen
+        title="삭제됐거나 보관 기간이 지난 모임이에요"
+        description="모임장이 모임을 삭제했거나, 모임 날짜로부터 180일이 지나 기록이 정리됐어요."
+        actionLabel="홈으로"
+        onAction={onHome}
+      />
+    );
+  }
+
   if (!bundle || loadError) {
+    // 실제로 초대 코드를 보낸 요청이 거절됐을 때만 만료 안내를 보여줘요.
     const inviteExpired =
-      Boolean(inviteCodeRef.current) &&
+      lastRequestSentInviteRef.current &&
       (loadErrorCode === "invite_required" || loadErrorCode === "invalid_invite");
     return (
       <StateScreen
@@ -697,7 +752,7 @@ export function OutingPage({
 
   const toggle = (item: PackingItem) => {
     if (!viewer) {
-      openJoin(item.owner ? null : item.id);
+      openJoin(item.owner || isPast ? null : item.id);
       return;
     }
     if (!canManageItem(item)) {
@@ -720,7 +775,7 @@ export function OutingPage({
 
   const claimForMe = async (item: PackingItem, closeAfter = false) => {
     if (!viewer) {
-      openJoin(item.id);
+      openJoin(isPast ? null : item.id);
       return;
     }
     if (closeAfter) setClaimOpen(false);
@@ -740,7 +795,7 @@ export function OutingPage({
 
   const handleOwnerClick = (item: PackingItem) => {
     if (!viewer) {
-      openJoin(item.owner ? null : item.id);
+      openJoin(item.owner || isPast ? null : item.id);
       return;
     }
     if (!item.owner) {
@@ -933,11 +988,14 @@ export function OutingPage({
     if (tab === detailTab) return;
     setDetailTab(tab);
     track("outing_detail_tab_selected", { tab });
+    // 탭 바가 이미 위에 붙어 있을 때만 새 패널의 처음으로 올려요.
     window.requestAnimationFrame(() => {
-      detailTabsRef.current?.scrollIntoView({
-        behavior: "smooth",
-        block: "start",
-      });
+      const sentinel = detailTabsSentinelRef.current;
+      if (!sentinel) return;
+      const top = sentinel.getBoundingClientRect().top + window.scrollY;
+      if (window.scrollY > top + 1) {
+        window.scrollTo({ top, behavior: "smooth" });
+      }
     });
   };
 
@@ -1003,6 +1061,27 @@ export function OutingPage({
   };
 
   const handleShare = async () => {
+    if (isPast) {
+      const recap = [
+        `🏖️ ${bundle.outing.title} 준비 기록`,
+        `준비 ${readyCount}/${bundle.items.length} · ${bundle.participants.length}명이 함께했어요`,
+        "우리가 함께 챙긴 기록 같이 봐요 👇",
+      ].join("\n");
+      const recapOutcome = await shareContent({
+        title: `${bundle.outing.title} 준비 기록`,
+        message: recap,
+        ...buildInviteLinks(),
+      });
+      track("outing_recap_shared", { outing_id: outingId, outcome: recapOutcome });
+      if (recapOutcome === "failed") {
+        showToast("공유하지 못했어요. 다시 시도해 주세요.", "error");
+        return;
+      }
+      if (recapOutcome === "cancelled") return;
+      setShareDone(true);
+      showToast(shareResultMessage(recapOutcome, "준비 기록"));
+      return;
+    }
     const day = daysUntil(bundle.outing.startsAt);
     const dayLabel = day === 0 ? "오늘" : day > 0 ? `D-${day}` : "";
     const ask =
@@ -1039,6 +1118,7 @@ export function OutingPage({
   const handleResetInvite = async () => {
     const changed = await runBulk(async (token) => {
       const result = await resetInviteCode(outingId, token);
+      localVersionRef.current += 1;
       setBundle((current) =>
         current
           ? {
@@ -1117,6 +1197,22 @@ export function OutingPage({
     }
   }
 
+  const anySheetOpen =
+    claimOpen ||
+    selectedItem != null ||
+    randomOpen ||
+    manageOpen ||
+    inviteOpen ||
+    celebrationOpen ||
+    (joinOpen && !viewer) ||
+    editOpen;
+  const dockVisible = (viewer && primaryAction) || (!viewer && inviteCodeRef.current);
+  const toastPlacement = anySheetOpen || !dockVisible
+    ? "default"
+    : viewer && secondaryAction
+      ? "above-dock-tall"
+      : "above-dock";
+
   return (
     <main
       className="app outing-app"
@@ -1191,9 +1287,17 @@ export function OutingPage({
           aria-labelledby="invite-entry-title"
         >
           <div>
-            <span>초대받은 모임이에요</span>
-            <h2 id="invite-entry-title">친구들과 준비물을 나눠 맡아보세요</h2>
-            <p>이름을 정하고 내가 챙길 준비물을 하나 골라요.</p>
+            <span>{isPast ? "다녀온 모임이에요" : "초대받은 모임이에요"}</span>
+            <h2 id="invite-entry-title">
+              {isPast
+                ? "함께한 친구라면 기록에 이름을 남겨요"
+                : "친구들과 준비물을 나눠 맡아보세요"}
+            </h2>
+            <p>
+              {isPast
+                ? "참여하면 준비 기록과 친구 소식을 함께 볼 수 있어요."
+                : "이름을 정하고 내가 챙길 준비물을 하나 골라요."}
+            </p>
           </div>
           <button type="button" onClick={() => openJoin()}>
             모임 참여하기
@@ -1218,6 +1322,11 @@ export function OutingPage({
         </div>
       </section>
 
+      <div
+        ref={detailTabsSentinelRef}
+        className="detail-tabs-sentinel"
+        aria-hidden="true"
+      />
       <nav
         ref={detailTabsRef}
         className="outing-detail-tabs"
@@ -1753,12 +1862,12 @@ export function OutingPage({
             type="button"
             onClick={() => openJoin()}
           >
-            모임 참여하고 하나 맡기
+            {isPast ? "모임 참여하기" : "모임 참여하고 하나 맡기"}
           </button>
         </div>
       ) : null}
 
-      <Toast toast={toast} />
+      <Toast toast={toast} placement={toastPlacement} />
 
       <Sheet
         open={claimOpen && unassignedItems.length > 0}
@@ -1956,11 +2065,17 @@ export function OutingPage({
         open={inviteOpen}
         onClose={() => setInviteOpen(false)}
         title={isPast ? "준비 기록을 나눠요" : "같이 갈 친구를 불러요"}
-        description="링크를 연 친구가 이 모임에 참여하고 같은 준비 상태를 볼 수 있어요."
+        description={
+          isPast
+            ? "링크를 연 친구도 이 모임의 준비 기록을 볼 수 있어요."
+            : "링크를 연 친구가 이 모임에 참여하고 같은 준비 상태를 볼 수 있어요."
+        }
       >
         <ProgressShareCard bundle={bundle} />
         <p className="share-card-hint">
-          진행 상황과 아직 주인이 없는 준비물을 함께 보내요.
+          {isPast
+            ? "준비 진행률과 함께한 친구를 보내요."
+            : "진행 상황과 아직 주인이 없는 준비물을 함께 보내요."}
         </p>
         <button
           className="sheet-primary"
@@ -1975,7 +2090,7 @@ export function OutingPage({
           ) : (
             <>
               <CopyIcon aria-hidden="true" />
-              초대 링크 공유하기
+              {isPast ? "준비 기록 공유하기" : "초대 링크 공유하기"}
             </>
           )}
         </button>
@@ -2040,12 +2155,13 @@ export function OutingPage({
         open={joinOpen && !viewer}
         bundle={bundle}
         inviteCode={inviteCodeRef.current ?? ""}
-        preselectItemId={joinPreselectItemId}
+        preselectItemId={isPast ? null : joinPreselectItemId}
         onClose={() => setJoinOpen(false)}
         onJoined={async (joinedSession, joinedBundle, claim) => {
           saveSession(joinedSession, joinedBundle.outing);
           sessionRef.current = joinedSession;
           setSession(joinedSession);
+          localVersionRef.current += 1;
           etagRef.current = null;
           setBundle(joinedBundle);
           setJoinOpen(false);
@@ -2073,6 +2189,7 @@ export function OutingPage({
           activities={activities}
           onClose={() => setEditOpen(false)}
           onSaved={(nextBundle) => {
+            localVersionRef.current += 1;
             etagRef.current = null;
             setBundle(nextBundle);
             if (sessionRef.current) {
@@ -2120,7 +2237,11 @@ function JoinSheet({
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState("");
   const savedType = useMemo(() => (open ? getSavedSummerType() : null), [open]);
-  const availableItems = bundle.items.filter((item) => item.owner == null);
+  // 지난 모임은 기록만 함께 보고 새로 맡지 않아요.
+  const isPast = isOutingPast(bundle);
+  const availableItems = isPast
+    ? []
+    : bundle.items.filter((item) => item.owner == null);
   const isFull =
     bundle.participants.length >= (bundle.maxParticipants ?? 30);
   const claimItem =
@@ -2193,8 +2314,16 @@ function JoinSheet({
     <Sheet
       open={open}
       onClose={onClose}
-      title={`${bundle.outing.title}에 같이 갈까요?`}
-      description={`${bundle.participants.length}명이 ${bundle.outing.placeName} 갈 준비를 하고 있어요.`}
+      title={
+        isPast
+          ? `${bundle.outing.title} 기록에 함께할까요?`
+          : `${bundle.outing.title}에 같이 갈까요?`
+      }
+      description={
+        isPast
+          ? `${bundle.participants.length}명이 ${bundle.outing.placeName}에 다녀온 모임이에요.`
+          : `${bundle.participants.length}명이 ${bundle.outing.placeName} 갈 준비를 하고 있어요.`
+      }
     >
       <form className="create-form join-form" onSubmit={submit}>
         {isFull ? (
@@ -2380,7 +2509,7 @@ function OutingEditSheet({
         if (!saving && !deleting) onClose();
       }}
       title="모임 정보 수정"
-      description="바꾼 내용은 참여한 친구들에게 바로 반영돼요. 준비물과 담당은 그대로예요."
+      description="저장하면 참여한 친구들에게 바로 반영돼요. 준비물과 담당은 그대로예요."
     >
       <form className="create-form outing-edit-form" onSubmit={save}>
         <label>
@@ -2480,10 +2609,12 @@ function OutingEditSheet({
             onChange={(place) => setPlaceId(place.id)}
           />
         </fieldset>
-        {error ? <p className="form-error">{error}</p> : null}
-        <button className="sheet-primary" type="submit" disabled={saving}>
-          {saving ? "저장하고 있어요…" : "바꾼 내용 저장하기"}
-        </button>
+        <div className="create-step-actions create-step-actions--single outing-edit-actions">
+          {error ? <p className="form-error">{error}</p> : null}
+          <button className="sheet-primary" type="submit" disabled={saving}>
+            {saving ? "저장하고 있어요…" : "바꾼 내용 저장하기"}
+          </button>
+        </div>
         <div className="outing-edit-danger">
           {deleteConfirm ? (
             <div className="invite-reset-confirm" role="alert">
