@@ -112,6 +112,19 @@ export function parseExpectedPeople(value) {
     : null;
 }
 
+/**
+ * 모임 생성 입력은 1 이상 정수(숫자 또는 숫자 문자열)를 받아요.
+ * 이미 출시된 앱이 999명까지 보낼 수 있어 50명을 넘으면 50명으로 맞춰요.
+ * 0·음수·소수·글자는 null이에요.
+ */
+export function parseCreateExpectedPeople(value) {
+  if (typeof value === "string" && !/^\s*\d+\s*$/.test(value)) return null;
+  if (typeof value !== "number" && typeof value !== "string") return null;
+  const parsed = Number(value);
+  if (!Number.isInteger(parsed) || parsed < MIN_EXPECTED_PEOPLE) return null;
+  return Math.min(MAX_EXPECTED_PEOPLE, parsed);
+}
+
 /** 수량 계산 인원: 예상 인원과 실제 참여자 수 중 큰 값(최대 50명)이에요. */
 export function getQuantityPeople(expectedPeople, participantCount = 0) {
   const participants = Number(participantCount);

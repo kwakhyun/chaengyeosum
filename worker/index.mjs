@@ -39,7 +39,8 @@ import {
   etagMatches,
   formatOutingEtag,
   getCleanupCutoffs,
-  identityRateBucket,
+  globalAiRateLimit,
+  identityRateLimits,
   mapMySessionRow,
   mapOutingRow,
   MAX_PARTICIPANTS,
@@ -47,7 +48,6 @@ import {
   outingRateBucket,
   parseOutingInput,
   parseSummarySessions,
-  pickClientIp,
   pickViewer,
   planItemUpdate,
   planRandomAssignments,
@@ -56,7 +56,12 @@ import {
   resolveAvatarKey,
   shouldLinkAnonymousUser,
 } from "../server/outing-rules.mjs";
-import { CLEANUP_SQL, SQL, SUMMARY_SQL } from "../server/outing-sql.mjs";
+import {
+  CLEANUP_SQL,
+  insertRandomizedEventSql,
+  SQL,
+  SUMMARY_SQL,
+} from "../server/outing-sql.mjs";
 import {
   getCustomPlace,
   getPlace,
@@ -77,7 +82,7 @@ import {
 } from "../server/summer-events.mjs";
 import {
   getCachedWeatherStamp,
-  getForecastWeather,
+  getForecastWeatherOrNull,
   getRegionalWeatherHighlights,
   getWeatherWindowStatus,
   isWeatherCacheFresh,
@@ -92,6 +97,9 @@ const CROWD_CACHE_TTL_MS = 5 * 60 * 1000;
 const WEATHER_LOOKUP_TTL_MS = 30 * 60 * 1000;
 const PLACE_SEARCH_TTL_MS = 24 * 60 * 60 * 1000;
 const OUTING_CACHE_CONTROL = "private, no-cache";
+// 브라우저가 CORS preflight 결과를 10분 동안 재사용해요(WebKit 상한).
+// 10초 폴링마다 OPTIONS 요청이 따로 가지 않게 해요.
+const PREFLIGHT_MAX_AGE_SECONDS = "600";
 
 export class OpenAiEgress {
   async fetch(request) {
@@ -166,12 +174,13 @@ function credentials(request) {
   };
 }
 
+/**
+ * 요청 한도에 쓰는 클라이언트 IP예요. CF-Connecting-IP는 Cloudflare가 넣는
+ * 값이라 믿을 수 있어요. X-Forwarded-For 첫 값은 클라이언트가 정할 수 있어
+ * 쓰지 않아요. IPv6는 identityRateLimits가 /64 단위로 묶어요(Node와 같아요).
+ */
 function clientIp(request) {
-  return pickClientIp({
-    cfConnectingIp: request.headers.get("cf-connecting-ip"),
-    forwardedFor: request.headers.get("x-forwarded-for"),
-    fallback: "",
-  });
+  return (request.headers.get("cf-connecting-ip") ?? "").trim();
 }
 
 async function readBody(request) {
@@ -430,11 +439,16 @@ function weatherOptions(db, outing, outingRow, nowMs) {
   return {
     outing,
     readCache: () => weatherCacheFromRow(outingRow),
+    // 예보를 받는 동안 날짜·장소가 바뀌었거나 모임이 지워졌으면 쓰지 않아요.
     writeCache: (payload, fetchedAt) =>
       run(db, SQL.putWeather, [
         outing.id,
         JSON.stringify(payload ?? null),
         fetchedAt,
+        outing.id,
+        outing.startsAt,
+        outing.latitude,
+        outing.longitude,
       ]),
     now: nowMs,
   };
@@ -512,23 +526,31 @@ async function loadEnrichedBundle(db, ctx, outingId, creds) {
 // 사용량 제한
 
 function identityLimit(config) {
-  return {
-    identity: config.bucket,
-    limit: config.limit,
-    error: "rate_limited",
-  };
+  return { identity: config };
 }
 
+/**
+ * 한도 항목을 차례로 소비해요. identityLimit 항목은 IP 버킷과(있으면)
+ * 사용자 키 버킷으로 펼쳐요. 하나라도 넘으면 앞에서 올린 값은 되돌려요.
+ */
 async function consumeLimits(request, db, entries) {
   const windowStart = rateLimitWindowStart(Date.now());
-  const consumed = [];
+  const resolved = [];
   for (const entry of entries) {
-    const bucket =
-      entry.bucket ??
-      (await identityRateBucket(entry.identity, {
-        userKey: anonymousUserKey(request),
-        ip: clientIp(request),
-      }));
+    if (entry.identity) {
+      resolved.push(
+        ...(await identityRateLimits(entry.identity, {
+          userKey: anonymousUserKey(request),
+          ip: clientIp(request),
+        })),
+      );
+    } else {
+      resolved.push(entry);
+    }
+  }
+  const consumed = [];
+  for (const entry of resolved) {
+    const { bucket } = entry;
     const row = await first(db, SQL.consumeRateLimit, [
       bucket,
       windowStart,
@@ -589,10 +611,13 @@ async function getOuting(request, db, ctx, outingId, url) {
           cached &&
           !isWeatherCacheFresh(cached.payload, cached.fetchedAt, nowMs)
         ) {
+          // 304에서도 만료된 예보는 뒤에서 갱신해요. 실제 행을 넘겨야
+          // 갱신이 실패했을 때 이전 예보를 지킬 수 있어요(force로 바로 갱신).
           const outing = mapOutingRow(outingRow, nowMs);
           scheduleWeatherRefresh(ctx, outing.id, () =>
             resolveOutingWeather({
-              ...weatherOptions(db, outing, { weather_fetched_at: null }, nowMs),
+              ...weatherOptions(db, outing, outingRow, nowMs),
+              force: true,
             }),
           );
         }
@@ -688,18 +713,22 @@ async function createOuting(request, db, ctx) {
 async function claimForJoin(db, outingId, participantId, item) {
   if (!item) return "none";
   if (item.owner_id == null) {
-    const result = await run(db, SQL.assignIfUnowned, [
-      participantId,
-      item.id,
-      outingId,
+    // 이벤트(같은 조건)·맡기·revision을 한 batch(트랜잭션)로 처리해요.
+    const [, assigned] = await db.batch([
+      statement(db, SQL.insertEventIfUnowned, [
+        opaqueId("evt"),
+        outingId,
+        participantId,
+        "claimed",
+        item.label,
+        new Date().toISOString(),
+        item.id,
+        outingId,
+      ]),
+      statement(db, SQL.assignIfUnowned, [participantId, item.id, outingId]),
+      bumpStatement(db, outingId),
     ]);
-    if (changesOf(result) > 0) {
-      await db.batch([
-        eventStatement(db, outingId, participantId, "claimed", item.label),
-        bumpStatement(db, outingId),
-      ]);
-      return "claimed";
-    }
+    if (changesOf(assigned) > 0) return "claimed";
   }
   const owner = await first(db, SQL.itemOwner, [item.id, outingId]);
   if (!owner) return "none";
@@ -923,27 +952,37 @@ async function updateItem(request, db, outingId, itemId) {
     if (plan.noop) return json(request, 200, { ok: true });
 
     // 읽은 담당자·완료 상태가 그대로일 때만 바꿔 동시에 맡기를 막아요.
-    const result = await run(db, SQL.updateItemIfUnchanged, [
-      plan.ownerId,
-      plan.done ? 1 : 0,
-      itemId,
-      outingId,
-      item.owner_id ?? null,
-      Number(item.done),
+    // 이벤트(같은 조건으로 확인)·변경·revision을 한 batch(트랜잭션)로 처리해
+    // 변경만 반영되고 revision이 안 오르는 일이 없게 해요.
+    const observedOwnerId = item.owner_id ?? null;
+    const observedDone = Number(item.done);
+    const createdAt = new Date().toISOString();
+    const results = await db.batch([
+      ...plan.events.map((event) =>
+        statement(db, SQL.insertEventIfItemUnchanged, [
+          opaqueId("evt"),
+          outingId,
+          event.participantId,
+          event.type,
+          item.label,
+          createdAt,
+          itemId,
+          outingId,
+          observedOwnerId,
+          observedDone,
+        ]),
+      ),
+      statement(db, SQL.updateItemIfUnchanged, [
+        plan.ownerId,
+        plan.done ? 1 : 0,
+        itemId,
+        outingId,
+        observedOwnerId,
+        observedDone,
+      ]),
+      bumpStatement(db, outingId),
     ]);
-    if (changesOf(result) > 0) {
-      await db.batch([
-        ...plan.events.map((event) =>
-          eventStatement(
-            db,
-            outingId,
-            event.participantId,
-            event.type,
-            item.label,
-          ),
-        ),
-        bumpStatement(db, outingId),
-      ]);
+    if (changesOf(results[plan.events.length]) > 0) {
       return json(request, 200, { ok: true });
     }
   }
@@ -1020,23 +1059,30 @@ async function deleteItem(request, db, outingId, itemId) {
       return errorResponse(request, "forbidden_delete");
     }
     // 마지막 준비물이 아니고 담당자가 그대로일 때만 지워요.
-    const result = await run(db, SQL.deleteItemIfAllowed, [
-      itemId,
-      outingId,
-      item.owner_id ?? null,
-      outingId,
+    // 이벤트(같은 조건으로 확인)·삭제·revision을 한 batch로 처리해요.
+    const observedOwnerId = item.owner_id ?? null;
+    const [, deleted] = await db.batch([
+      statement(db, SQL.insertEventIfItemDeletable, [
+        opaqueId("evt"),
+        outingId,
+        access.viewer.id,
+        "item_deleted",
+        item.label,
+        new Date().toISOString(),
+        itemId,
+        outingId,
+        observedOwnerId,
+        outingId,
+      ]),
+      statement(db, SQL.deleteItemIfAllowed, [
+        itemId,
+        outingId,
+        observedOwnerId,
+        outingId,
+      ]),
+      bumpStatement(db, outingId),
     ]);
-    if (changesOf(result) > 0) {
-      await db.batch([
-        eventStatement(
-          db,
-          outingId,
-          access.viewer.id,
-          "item_deleted",
-          item.label,
-        ),
-        bumpStatement(db, outingId),
-      ]);
+    if (changesOf(deleted) > 0) {
       return json(request, 200, { ok: true });
     }
     const countRow = await first(db, SQL.itemCount, [outingId]);
@@ -1050,15 +1096,22 @@ async function deleteItem(request, db, outingId, itemId) {
 async function completeMine(request, db, outingId) {
   const { access, response } = await requireParticipant(request, db, outingId);
   if (response) return response;
-  const result = await run(db, SQL.completeMine, [outingId, access.viewer.id]);
-  const completed = changesOf(result);
-  if (completed > 0) {
-    await db.batch([
-      eventStatement(db, outingId, access.viewer.id, "completed_mine"),
-      bumpStatement(db, outingId),
-    ]);
-  }
-  return json(request, 200, { ok: true, completed });
+  // 이벤트(남은 준비물이 있을 때만)·완료·revision을 한 batch로 처리해요.
+  const [, result] = await db.batch([
+    statement(db, SQL.insertEventIfOpenItems, [
+      opaqueId("evt"),
+      outingId,
+      access.viewer.id,
+      "completed_mine",
+      null,
+      new Date().toISOString(),
+      outingId,
+      access.viewer.id,
+    ]),
+    statement(db, SQL.completeMine, [outingId, access.viewer.id]),
+    bumpStatement(db, outingId),
+  ]);
+  return json(request, 200, { ok: true, completed: changesOf(result) });
 }
 
 async function randomizeItems(request, db, outingId) {
@@ -1088,26 +1141,29 @@ async function randomizeItems(request, db, outingId) {
     randomInt,
   });
   // 그사이 누군가 맡은 준비물은 건너뛰어요(owner_id IS NULL 조건).
-  const results = await db.batch(
-    assignments.map(({ itemId, ownerId }) =>
-      statement(db, SQL.assignIfUnowned, [ownerId, itemId, outingId]),
-    ),
-  );
-  const assigned = results.reduce(
-    (sum, result) => sum + changesOf(result),
-    0,
-  );
-  if (assigned === 0) return errorResponse(request, "nothing_to_assign");
-  await db.batch([
-    eventStatement(
-      db,
+  // 이벤트(배정될 개수를 같은 조건으로 계산)·배정·revision을 한 batch로
+  // 처리해요.
+  const itemIds = assignments.map(({ itemId }) => itemId);
+  const results = await db.batch([
+    statement(db, insertRandomizedEventSql(itemIds.length), [
+      opaqueId("evt"),
       outingId,
       access.viewer.id,
-      "randomized",
-      String(assigned),
+      outingId,
+      ...itemIds,
+      new Date().toISOString(),
+      outingId,
+      ...itemIds,
+    ]),
+    ...assignments.map(({ itemId, ownerId }) =>
+      statement(db, SQL.assignIfUnowned, [ownerId, itemId, outingId]),
     ),
     bumpStatement(db, outingId),
   ]);
+  const assigned = results
+    .slice(1, 1 + assignments.length)
+    .reduce((sum, result) => sum + changesOf(result), 0);
+  if (assigned === 0) return errorResponse(request, "nothing_to_assign");
   return json(request, 200, { ok: true, assigned });
 }
 
@@ -1165,7 +1221,9 @@ async function listMySessions(request, db) {
 
 async function getOutingSummaries(request, db) {
   const sessions = parseSummarySessions(await readBody(request));
-  if (sessions.length === 0) return json(request, 200, { summaries: [] });
+  if (sessions.length === 0) {
+    return json(request, 200, { summaries: [], missing: [] });
+  }
 
   const userKey = anonymousUserKey(request);
   const outingIds = sessions.map((session) => session.outingId);
@@ -1205,7 +1263,7 @@ async function getOutingSummaries(request, db) {
   const tokenRows = presentHashes.length > 0 ? rowsOf(results[index++]) : [];
   const anonymousRows = anonymousHash ? rowsOf(results[index++]) : [];
 
-  const { summaries, links } = assembleOutingSummaries({
+  const { summaries, links, missing } = assembleOutingSummaries({
     sessions,
     tokenHashes,
     anonymousHash,
@@ -1227,7 +1285,8 @@ async function getOutingSummaries(request, db) {
       ),
     );
   }
-  return json(request, 200, { summaries });
+  // missing: 삭제됐거나 보관 기간이 지나 모임 행이 없는 outingId예요.
+  return json(request, 200, { summaries, missing });
 }
 
 // ---------------------------------------------------------------------------
@@ -1290,6 +1349,9 @@ async function getAiBriefing(request, env, db, ctx, outingId) {
       limit: AI_BRIEFING_DAILY_LIMIT,
       error: "ai_daily_limit",
     },
+    // 서비스 전체 한도가 다 찼을 때 뒤 버킷을 올렸다 되돌리는 쓰기가 없게
+    // 사람 기준 한도보다 먼저 확인해요.
+    globalAiRateLimit(env.AI_GLOBAL_DAILY_LIMIT, "ai_global_limit"),
     identityLimit(RATE_LIMITS.aiBriefing),
   ]);
   if (limited) return errorResponse(request, limited);
@@ -1413,13 +1475,16 @@ function startsAtMs(startsAt) {
   return parseDateInput(startsAt) ?? Date.parse(startsAt);
 }
 
-async function getPlaceIntelligence(request, env, db, outingId) {
+async function getPlaceIntelligence(request, env, db, outingId, url) {
   const { access, response } = await requireParticipant(request, db, outingId);
   if (response) return response;
   const nowMs = Date.now();
   const outing = mapOutingRow(access.outingRow, nowMs);
   const place = outingPlace(outing);
-  if (!isOutingToday(outing.startsAt, nowMs)) {
+  // 이미 출시된 앱은 basis를 모르고 늘 '지금' 혼잡도로 보여줘서,
+  // ?basis=outing을 보낸 요청에만 모임 시각 기준 예상을 돌려줘요.
+  const wantsOutingBasis = url?.searchParams.get("basis") === "outing";
+  if (wantsOutingBasis && !isOutingToday(outing.startsAt, nowMs)) {
     // 오늘이 아닌 모임은 모임 시각 기준으로 혼잡도를 예상해요.
     return json(request, 200, {
       crowd: estimateCrowd(place, {
@@ -1483,6 +1548,9 @@ async function getSummerEvents(request, env, db, outingId) {
       limit: SUMMER_EVENT_DAILY_LIMIT,
       error: "events_daily_limit",
     },
+    // 서비스 전체 한도가 다 찼을 때 뒤 버킷을 올렸다 되돌리는 쓰기가 없게
+    // 사람 기준 한도보다 먼저 확인해요.
+    globalAiRateLimit(env.AI_GLOBAL_DAILY_LIMIT, "events_global_limit"),
     identityLimit(RATE_LIMITS.summerEvents),
   ]);
   if (limited) return errorResponse(request, limited);
@@ -1592,7 +1660,7 @@ async function getLocationWeather(request, ctx, url) {
     `location-weather:${date}:${roundedLatitude}:${roundedLongitude}`,
     WEATHER_LOOKUP_TTL_MS,
     () =>
-      getForecastWeather({
+      getForecastWeatherOrNull({
         id: `location-${roundedLatitude}-${roundedLongitude}`,
         startsAt: `${date}T12:00:00+09:00`,
         latitude: Number(roundedLatitude),
@@ -1643,7 +1711,7 @@ async function getPackingRecommendations(request, ctx, url) {
       `packing-weather:${place.id}:${dateKey}`,
       WEATHER_LOOKUP_TTL_MS,
       () =>
-        getForecastWeather({
+        getForecastWeatherOrNull({
           id: "preview",
           startsAt,
           latitude: place.latitude,
@@ -1733,7 +1801,7 @@ const OUTING_ROUTES = [
   [
     "GET",
     /^\/api\/outings\/([^/]+)\/place-intelligence$/,
-    (c, id) => getPlaceIntelligence(c.request, c.env, c.db, id),
+    (c, id) => getPlaceIntelligence(c.request, c.env, c.db, id, c.url),
   ],
   [
     "POST",
@@ -1780,7 +1848,10 @@ async function handleRequest(request, env, ctx) {
   if (request.method === "OPTIONS") {
     return new Response(null, {
       status: 204,
-      headers: corsHeaders(request),
+      headers: {
+        ...corsHeaders(request),
+        "access-control-max-age": PREFLIGHT_MAX_AGE_SECONDS,
+      },
     });
   }
   if (!db) return errorResponse(request, "db_unavailable");

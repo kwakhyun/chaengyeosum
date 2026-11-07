@@ -244,6 +244,64 @@ export const SQL = {
     UPDATE outings SET revision = revision + 1
     WHERE id = ? AND EXISTS (SELECT 1 FROM checklist_items WHERE id = ?)
   `,
+  // 아래 이벤트 문장들은 D1 batch에서 조건부 쓰기 "앞"에 두고, 그 쓰기와
+  // 같은 조건을 확인해요. batch는 한 트랜잭션이라 조건이 맞으면 뒤따르는
+  // 쓰기도 반드시 반영돼요(changes()에 기대지 않아요).
+  // updateItemIfUnchanged와 같은 조건이에요.
+  // params: [id, outingId, participantId, eventType, itemLabel, createdAt,
+  //          itemId, outingId, observedOwnerId, observedDone]
+  insertEventIfItemUnchanged: `
+    INSERT INTO activity_events (
+      id, outing_id, participant_id, event_type, item_label, created_at
+    )
+    SELECT ?, ?, ?, ?, ?, ?
+    WHERE EXISTS (
+      SELECT 1 FROM checklist_items
+      WHERE id = ? AND outing_id = ? AND owner_id IS ? AND done = ?
+    )
+  `,
+  // deleteItemIfAllowed와 같은 조건이에요.
+  // params: [id, outingId, participantId, eventType, itemLabel, createdAt,
+  //          itemId, outingId, observedOwnerId, outingId]
+  insertEventIfItemDeletable: `
+    INSERT INTO activity_events (
+      id, outing_id, participant_id, event_type, item_label, created_at
+    )
+    SELECT ?, ?, ?, ?, ?, ?
+    WHERE EXISTS (
+      SELECT 1 FROM checklist_items
+      WHERE id = ? AND outing_id = ? AND owner_id IS ?
+    )
+    AND (
+      SELECT COUNT(*) FROM checklist_items WHERE outing_id = ?
+    ) > 1
+  `,
+  // completeMine과 같은 조건이에요.
+  // params: [id, outingId, participantId, eventType, itemLabel, createdAt,
+  //          outingId, participantId]
+  insertEventIfOpenItems: `
+    INSERT INTO activity_events (
+      id, outing_id, participant_id, event_type, item_label, created_at
+    )
+    SELECT ?, ?, ?, ?, ?, ?
+    WHERE EXISTS (
+      SELECT 1 FROM checklist_items
+      WHERE outing_id = ? AND owner_id = ? AND done = 0
+    )
+  `,
+  // assignIfUnowned와 같은 조건이에요.
+  // params: [id, outingId, participantId, eventType, itemLabel, createdAt,
+  //          itemId, outingId]
+  insertEventIfUnowned: `
+    INSERT INTO activity_events (
+      id, outing_id, participant_id, event_type, item_label, created_at
+    )
+    SELECT ?, ?, ?, ?, ?, ?
+    WHERE EXISTS (
+      SELECT 1 FROM checklist_items
+      WHERE id = ? AND outing_id = ? AND owner_id IS NULL
+    )
+  `,
   // params: [outingId]
   outingInvite: `SELECT id, invite_code FROM outings WHERE id = ?`,
   // params: [outingId]
@@ -278,10 +336,18 @@ export const SQL = {
   `,
   // params: [outingId]
   deleteOuting: `DELETE FROM outings WHERE id = ?`,
-  // params: [outingId, payload, fetchedAt]
+  // 예보를 받은 뒤 모임 날짜·장소가 바뀌었거나 모임이 지워졌으면 쓰지
+  // 않아요(늦게 끝난 갱신이 새 예보를 덮거나 FK 오류가 나지 않게).
+  // SELECT에 WHERE가 있어 upsert의 ON CONFLICT와 헷갈리지 않아요.
+  // params: [outingId, payload, fetchedAt,
+  //          outingId, startsAt, latitude, longitude]
   putWeather: `
     INSERT INTO weather_cache (outing_id, payload, fetched_at)
-    VALUES (?, ?, ?)
+    SELECT ?, ?, ?
+    WHERE EXISTS (
+      SELECT 1 FROM outings
+      WHERE id = ? AND starts_at = ? AND latitude = ? AND longitude = ?
+    )
     ON CONFLICT(outing_id) DO UPDATE SET
       payload = excluded.payload,
       fetched_at = excluded.fetched_at
@@ -350,6 +416,34 @@ export const SUMMARY_SQL = {
     WHERE outing_id IN (${placeholders(count)})
   `,
 };
+
+// 무작위 배정(assignIfUnowned 여러 개) "앞"에 두는 이벤트예요. 아직 담당자가
+// 없는 대상 준비물 수가 곧 배정될 개수라 item_label에 그 수를 남기고,
+// 하나도 없으면 이벤트를 남기지 않아요.
+// params: [id, outingId, participantId, outingId, ...itemIds, createdAt,
+//          outingId, ...itemIds]
+export function insertRandomizedEventSql(itemCount) {
+  const ids = placeholders(itemCount);
+  return `
+    INSERT INTO activity_events (
+      id, outing_id, participant_id, event_type, item_label, created_at
+    )
+    SELECT ?, ?, ?, 'randomized', (
+      SELECT CAST(COUNT(*) AS TEXT) FROM checklist_items
+      WHERE outing_id = ? AND owner_id IS NULL AND id IN (${ids})
+    ), ?
+    WHERE EXISTS (
+      SELECT 1 FROM checklist_items
+      WHERE outing_id = ? AND owner_id IS NULL AND id IN (${ids})
+    )
+  `;
+}
+
+// 예전 서버(최대 999명)가 저장한 50명 초과 예상 인원을 50명으로 맞춰요.
+// migrations/0005_revisions_rate_limits.sql과 같은 내용이에요.
+export const NORMALIZE_EXPECTED_PEOPLE_SQL = `
+  UPDATE outings SET expected_people = 50 WHERE expected_people > 50;
+`;
 
 // 오래된 데이터 정리: 지운 모임에 딸린 행을 함께 지워요.
 export const CLEANUP_SQL = {

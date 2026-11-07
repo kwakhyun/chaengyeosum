@@ -32,6 +32,18 @@ async function request(path, options = {}) {
 const health = await request("/api/health");
 assert.equal(health.storage, "cloudflare-d1");
 
+// 10초 폴링마다 preflight가 다시 가지 않게 10분 동안 재사용해요.
+const preflight = await fetch(`${baseUrl}/api/outings/out_any`, {
+  method: "OPTIONS",
+  headers: {
+    origin: "https://example.com",
+    "access-control-request-method": "GET",
+    "access-control-request-headers": "authorization, if-none-match",
+  },
+});
+assert.equal(preflight.status, 204);
+assert.equal(preflight.headers.get("access-control-max-age"), "600");
+
 const anonymousUserKey = `worker-smoke-${Date.now()}`;
 const created = await request("/api/outings", {
   method: "POST",
@@ -53,7 +65,7 @@ const created = await request("/api/outings", {
     expectedPeople: 6,
     creatorName: "검증이",
     avatarKey: "type-planner",
-    itemKeys: ["water", "battery", "camera"],
+    itemKeys: ["water", "battery", "camera", "hat"],
   }),
 });
 assert.equal(created.outing.outing.expectedPeople, 6);
@@ -83,6 +95,21 @@ const pastDate = await raw("/api/outings", {
 assert.equal(pastDate.response.status, 400);
 assert.equal(pastDate.body.code, "invalid_date");
 
+// 이미 출시된 앱은 999명까지 보낼 수 있어 생성은 50명으로 맞춰 받아요.
+const crowded = await request("/api/outings", {
+  method: "POST",
+  headers: { "content-type": "application/json" },
+  body: JSON.stringify({
+    title: "큰 모임",
+    placeId: "seoul-forest",
+    startsAt: futureStartsAt(20),
+    expectedPeople: 999,
+    creatorName: "검증이",
+    itemKeys: ["water"],
+  }),
+});
+assert.equal(crowded.outing.outing.expectedPeople, 50);
+
 const recovered = await request("/api/me/outings", {
   headers: { "x-chaengyeosum-user-key": anonymousUserKey },
 });
@@ -107,6 +134,25 @@ assert.equal(joined.outing.participants.length, 2);
 assert.equal(joined.claimResult, "none");
 const friendAuth = { authorization: `Bearer ${joined.session.token}` };
 
+// 참여하면서 준비물을 맡으면 이벤트·revision이 함께 반영돼요.
+const hatItem = joined.outing.items.find((item) => item.key === "hat");
+const claimer = await request(`/api/outings/${outingId}/join`, {
+  method: "POST",
+  headers: { "content-type": "application/json" },
+  body: JSON.stringify({
+    inviteCode: created.outing.outing.inviteCode,
+    name: "모자",
+    claimItemId: hatItem.id,
+  }),
+});
+assert.equal(claimer.claimResult, "claimed");
+assert.equal(
+  claimer.outing.items.find((item) => item.id === hatItem.id).owner.id,
+  claimer.session.participantId,
+);
+assert.equal(claimer.outing.events[0].type, "claimed");
+const claimerAuth = { authorization: `Bearer ${claimer.session.token}` };
+
 const unassigned = joined.outing.items.find((item) => item.owner == null);
 await request(`/api/outings/${outingId}/items/${unassigned.id}`, {
   method: "PATCH",
@@ -116,6 +162,52 @@ await request(`/api/outings/${outingId}/items/${unassigned.id}`, {
     done: true,
   }),
 });
+const afterClaim = await request(`/api/outings/${outingId}`, {
+  headers: friendAuth,
+});
+assert.deepEqual(
+  afterClaim.events.slice(0, 2).map((item) => item.type),
+  ["completed", "claimed"],
+);
+
+// 내 준비물 모두 완료: 남은 게 있을 때만 이벤트를 남겨요.
+const completed = await request(`/api/outings/${outingId}/complete-mine`, {
+  method: "POST",
+  headers: claimerAuth,
+});
+assert.equal(completed.completed, 1);
+const completedAgain = await request(`/api/outings/${outingId}/complete-mine`, {
+  method: "POST",
+  headers: claimerAuth,
+});
+assert.equal(completedAgain.completed, 0);
+const afterComplete = await request(`/api/outings/${outingId}`, {
+  headers: claimerAuth,
+});
+assert.equal(
+  afterComplete.events.filter((item) => item.type === "completed_mine").length,
+  1,
+);
+
+// 준비물을 추가했다 지우면 삭제 이벤트가 함께 남아요.
+const added = await request(`/api/outings/${outingId}/items`, {
+  method: "POST",
+  headers: { ...creatorAuth, "content-type": "application/json" },
+  body: JSON.stringify({ label: "지울 준비물" }),
+});
+await request(`/api/outings/${outingId}/items/${added.itemId}`, {
+  method: "DELETE",
+  headers: creatorAuth,
+});
+const afterDelete = await request(`/api/outings/${outingId}`, {
+  headers: creatorAuth,
+});
+assert.equal(afterDelete.events[0].type, "item_deleted");
+assert.equal(afterDelete.events[0].itemLabel, "지울 준비물");
+assert.equal(
+  afterDelete.items.some((item) => item.id === added.itemId),
+  false,
+);
 
 // 다른 사람이 맡은 준비물은 가져갈 수 없어요.
 const creatorsItem = joined.outing.items.find((item) => item.key === "water");
@@ -186,10 +278,14 @@ assert.equal(patched.outing.weatherStatus, "out_of_range");
 assert.equal(patched.outing.weather, null);
 assert.equal(patched.outing.events[0].type, "updated");
 
-await request(`/api/outings/${outingId}/randomize`, {
+const unassignedBefore = patched.outing.items.filter(
+  (item) => item.owner == null,
+).length;
+const randomized = await request(`/api/outings/${outingId}/randomize`, {
   method: "POST",
   headers: creatorAuth,
 });
+assert.equal(randomized.assigned, unassignedBefore);
 
 const finalView = await request(`/api/outings/${outingId}`, {
   headers: creatorAuth,
@@ -198,6 +294,20 @@ assert.equal(
   finalView.items.every((item) => item.owner != null),
   true,
 );
+assert.equal(finalView.events[0].type, "randomized");
+assert.equal(finalView.events[0].itemLabel, String(unassignedBefore));
+
+// 출시된 앱(플래그 없음)은 '지금' 혼잡도, 새 앱은 모임 시각 기준 예상이에요.
+const crowdNow = await request(
+  `/api/outings/${outingId}/place-intelligence`,
+  { headers: creatorAuth },
+);
+assert.equal(crowdNow.crowd.basis, "now");
+const crowdAtOuting = await request(
+  `/api/outings/${outingId}/place-intelligence?basis=outing`,
+  { headers: creatorAuth },
+);
+assert.equal(crowdAtOuting.crowd.basis, "outing");
 
 const summaries = await request("/api/outing-summaries", {
   method: "POST",
@@ -210,6 +320,7 @@ const summaries = await request("/api/outing-summaries", {
   }),
 });
 assert.equal(summaries.summaries.length, 1);
+assert.deepEqual(summaries.missing, ["out_missing"]);
 assert.equal(summaries.summaries[0].outingId, outingId);
 assert.equal(summaries.summaries[0].total, finalView.items.length);
 assert.equal(summaries.summaries[0].canDelete, true);

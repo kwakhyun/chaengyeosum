@@ -1,9 +1,14 @@
 import assert from "node:assert/strict";
 import { once } from "node:events";
+import { mkdtempSync, rmSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import { DatabaseSync } from "node:sqlite";
 import test from "node:test";
 
 import { createApiServer } from "./app.mjs";
 import { addDaysToDateKey } from "./kst-date.mjs";
+import { mapOutingRow, RATE_LIMITS } from "./outing-rules.mjs";
 import { getKoreaDateKey } from "./weather.mjs";
 
 function futureStartsAt(daysAhead = 7, time = "14:00") {
@@ -1110,13 +1115,27 @@ test("모임 날짜는 오늘부터 365일 안의 한국 시간으로 정규화�
       `${kstDate}T01:30:00+09:00`,
     );
 
-    for (const expectedPeople of [0, 51, 2.5, "많이"]) {
+    for (const expectedPeople of [0, -3, 2.5, "2.5", "많이", "3명", true]) {
       const result = await call(baseUrl, "/api/outings", {
         method: "POST",
         body: { ...base, startsAt: futureStartsAt(2), expectedPeople },
       });
-      assert.equal(result.status, 400);
+      assert.equal(result.status, 400, String(expectedPeople));
       assert.equal(result.body.code, "invalid_people");
+    }
+    // 이미 출시된 앱은 999명까지 보낼 수 있어 생성은 50명으로 맞춰 받아요.
+    for (const [expectedPeople, stored] of [
+      [51, 50],
+      [999, 50],
+      ["120", 50],
+      ["7", 7],
+    ]) {
+      const result = await call(baseUrl, "/api/outings", {
+        method: "POST",
+        body: { ...base, startsAt: futureStartsAt(2), expectedPeople },
+      });
+      assert.equal(result.status, 201, String(expectedPeople));
+      assert.equal(result.body.outing.outing.expectedPeople, stored);
     }
     const defaulted = await call(baseUrl, "/api/outings", {
       method: "POST",
@@ -1331,6 +1350,8 @@ test("모임 정보는 만든 사람만 수정하고 날짜·장소가 바뀌면
       for (const [body, code] of [
         [{ startsAt: futureStartsAt(-3) }, "invalid_date"],
         [{ expectedPeople: 0 }, "invalid_people"],
+        // 수정은 새 앱만 보내므로 1~50명만 받아요.
+        [{ expectedPeople: 51 }, "invalid_people"],
         [{ title: "a" }, "invalid_outing"],
         [{ placeId: "nowhere" }, "invalid_outing"],
         [{}, "invalid_outing"],
@@ -1512,6 +1533,8 @@ test("바뀐 게 없으면 ETag로 304를 돌려준다", async () => {
       preflight.headers.get("access-control-allow-headers"),
       /if-none-match/,
     );
+    // 10초 폴링마다 preflight가 다시 가지 않게 10분 동안 재사용해요.
+    assert.equal(preflight.headers.get("access-control-max-age"), "600");
 
     const notModified = await call(baseUrl, path, {
       token: created.session.token,
@@ -1687,6 +1710,8 @@ test("여러 모임 요약을 한 번에 가볍게 돌려준다", async () => {
       },
     });
     assert.equal(result.status, 200);
+    // 모임 행이 없는 outingId만 missing에 담아요.
+    assert.deepEqual(result.body.missing, ["out_missing"]);
     assert.deepEqual(result.body.summaries, [
       {
         outingId: first.outing.outing.id,
@@ -1725,11 +1750,37 @@ test("여러 모임 요약을 한 번에 가볍게 돌려준다", async () => {
     assert.equal(friendSummary.body.summaries[0].canDelete, false);
     assert.equal(friendSummary.body.summaries[0].myOpen, 1);
 
-    // 토큰으로 요약을 읽으면 익명 사용자 키도 연결돼 내 모임에 보여요.
+    // 권한만 없는 모임은 요약에서 빠지지만 missing에는 넣지 않아요.
+    // 지운 모임은 missing으로 알려줘 앱이 목록에서 정리할 수 있어요.
+    const deleted = await call(baseUrl, `/api/outings/${second.outing.outing.id}`, {
+      method: "DELETE",
+      token: second.session.token,
+    });
+    assert.equal(deleted.status, 200);
+    const afterDelete = await call(baseUrl, "/api/outing-summaries", {
+      method: "POST",
+      body: {
+        sessions: [
+          { outingId: first.outing.outing.id, token: "not-a-member" },
+          { outingId: second.outing.outing.id, token: second.session.token },
+        ],
+      },
+    });
+    assert.equal(afterDelete.status, 200);
+    assert.deepEqual(afterDelete.body.summaries, []);
+    assert.deepEqual(afterDelete.body.missing, [second.outing.outing.id]);
+    const empty = await call(baseUrl, "/api/outing-summaries", {
+      method: "POST",
+      body: { sessions: [] },
+    });
+    assert.deepEqual(empty.body, { summaries: [], missing: [] });
+
+    // 토큰으로 요약을 읽으면 익명 사용자 키도 연결돼 내 모임에 보여요
+    // (둘째 모임은 위에서 지웠어요).
     const linked = await call(baseUrl, "/api/me/outings", { userKey });
     assert.deepEqual(
-      linked.body.sessions.map((session) => session.outingId).sort(),
-      [first.outing.outing.id, second.outing.outing.id].sort(),
+      linked.body.sessions.map((session) => session.outingId),
+      [first.outing.outing.id],
     );
   });
 });
@@ -1800,9 +1851,19 @@ test("모임 혼잡도는 오늘이 아니면 모임 시각 기준으로 예상�
       placeId: "gwangalli",
       startsAt: futureStartsAt(6, "19:00"),
     });
-    const laterCrowd = await call(
+    // 이미 출시된 앱(플래그 없음)은 예전처럼 '지금' 혼잡도를 받아요.
+    const legacyCrowd = await call(
       baseUrl,
       `/api/outings/${later.outing.outing.id}/place-intelligence`,
+      { token: later.session.token },
+    );
+    assert.equal(legacyCrowd.status, 200);
+    assert.equal(legacyCrowd.body.crowd.basis, "now");
+    assert.match(legacyCrowd.body.crowd.summary, /^지금은/);
+
+    const laterCrowd = await call(
+      baseUrl,
+      `/api/outings/${later.outing.outing.id}/place-intelligence?basis=outing`,
       { token: later.session.token },
     );
     assert.equal(laterCrowd.status, 200);
@@ -1815,9 +1876,10 @@ test("모임 혼잡도는 오늘이 아니면 모임 시각 기준으로 예상�
       placeId: "gwangalli",
       startsAt: futureStartsAt(0, "23:00"),
     });
+    // 오늘 모임은 플래그가 있어도 '지금' 혼잡도예요.
     const todayCrowd = await call(
       baseUrl,
-      `/api/outings/${today.outing.outing.id}/place-intelligence`,
+      `/api/outings/${today.outing.outing.id}/place-intelligence?basis=outing`,
       { token: today.session.token },
     );
     assert.equal(todayCrowd.body.crowd.basis, "now");
@@ -1833,4 +1895,353 @@ test("모임 혼잡도는 오늘이 아니면 모임 시각 기준으로 예상�
       ),
     );
   });
+});
+
+test("사용자 키를 바꿔 가며 보내도 같은 IP에서는 IP 한도에 막힌다", async () => {
+  const { ipLimit } = RATE_LIMITS.createOuting;
+  const body = {
+    title: "한도 초과",
+    placeId: "seoul-forest",
+    startsAt: futureStartsAt(3),
+    creatorName: "모임장",
+    itemKeys: ["water"],
+  };
+  await withServer(async (baseUrl) => {
+    for (let index = 0; index < ipLimit; index += 1) {
+      await createTestOuting(
+        baseUrl,
+        { title: `키 바꾸기 ${index}` },
+        { userKey: `rotating-${index}` },
+      );
+    }
+    // 새 사용자 키라도 같은 IP라면 막혀요. TRUST_PROXY가 꺼져 있으면
+    // 프록시 헤더를 바꿔 보내도 소켓 주소로 세요.
+    const rotated = await call(baseUrl, "/api/outings", {
+      method: "POST",
+      userKey: "rotating-new",
+      headers: {
+        "x-forwarded-for": "203.0.113.9",
+        "cf-connecting-ip": "203.0.113.9",
+      },
+      body,
+    });
+    assert.equal(rotated.status, 429);
+    assert.deepEqual(rotated.body, {
+      error: "오늘은 요청이 너무 많아요. 내일 다시 시도해 주세요.",
+      code: "rate_limited",
+    });
+    // 사용자 키를 빼고 보내도 같은 IP 버킷이에요.
+    const keyless = await call(baseUrl, "/api/outings", {
+      method: "POST",
+      body,
+    });
+    assert.equal(keyless.status, 429);
+  });
+
+  // TRUST_PROXY=1이면 믿는 프록시가 X-Forwarded-For 오른쪽에 덧붙인 값으로
+  // 세요. 클라이언트가 보낸 왼쪽 값이나 CF-Connecting-IP를 바꿔도 버킷을
+  // 고를 수 없어요.
+  await withServer(
+    async (baseUrl) => {
+      const viaProxy = (spoofed, peer, userKey) =>
+        call(baseUrl, "/api/outings", {
+          method: "POST",
+          userKey,
+          headers: {
+            "x-forwarded-for": `${spoofed}, ${peer}`,
+            "cf-connecting-ip": spoofed,
+          },
+          body,
+        });
+      for (let index = 0; index < ipLimit; index += 1) {
+        const result = await viaProxy(
+          `10.${index}.0.1`,
+          "198.51.100.7",
+          `proxy-${index}`,
+        );
+        assert.equal(result.status, 201, JSON.stringify(result.body));
+      }
+      assert.equal(
+        (await viaProxy("10.250.0.1", "198.51.100.7", "proxy-new")).status,
+        429,
+      );
+      assert.equal(
+        (await viaProxy("10.250.0.1", "198.51.100.8", "proxy-new")).status,
+        201,
+      );
+    },
+    { trustProxy: true },
+  );
+});
+
+test("IPv6는 /64 단위로 세고 TRUST_PROXY=cloudflare일 때만 CF-Connecting-IP를 믿는다", async () => {
+  const { ipLimit } = RATE_LIMITS.createOuting;
+  const body = {
+    title: "IPv6 한도",
+    placeId: "seoul-forest",
+    startsAt: futureStartsAt(3),
+    creatorName: "모임장",
+    itemKeys: ["water"],
+  };
+  await withServer(
+    async (baseUrl) => {
+      const fromIp = (ip, userKey) =>
+        call(baseUrl, "/api/outings", {
+          method: "POST",
+          userKey,
+          // cloudflare 모드에서는 X-Forwarded-For를 보지 않아요.
+          headers: {
+            "cf-connecting-ip": ip,
+            "x-forwarded-for": "198.51.100.200",
+          },
+          body,
+        });
+      // 같은 /64 안에서 주소와 사용자 키를 함께 바꿔도 한 버킷이에요.
+      for (let index = 0; index < ipLimit; index += 1) {
+        const result = await fromIp(
+          `2001:db8:1:2:${index.toString(16)}::${index + 1}`,
+          `v6-${index}`,
+        );
+        assert.equal(result.status, 201, JSON.stringify(result.body));
+      }
+      const limited = await fromIp("2001:db8:1:2:ffff::1", "v6-new");
+      assert.equal(limited.status, 429);
+      assert.equal(limited.body.code, "rate_limited");
+      assert.equal((await fromIp("2001:db8:1:3::1", "v6-new")).status, 201);
+      assert.equal((await fromIp("192.0.2.1", "v4-new")).status, 201);
+    },
+    { trustProxy: "cloudflare" },
+  );
+});
+
+test("AI 브리핑과 행사 검색은 서비스 전체 하루 OpenAI 한도를 함께 쓴다", async () => {
+  let openAiCalls = 0;
+  const fetchImpl = async () => {
+    openAiCalls += 1;
+    return new Response(JSON.stringify({ error: { code: "server_error" } }), {
+      status: 500,
+      headers: { "content-type": "application/json" },
+    });
+  };
+  await withServer(
+    async (baseUrl) => {
+      const first = await createTestOuting(baseUrl);
+      const second = await createTestOuting(baseUrl, {}, { userKey: "other" });
+      const briefing = (created) =>
+        call(baseUrl, `/api/outings/${created.outing.outing.id}/ai-briefing`, {
+          method: "POST",
+          token: created.session.token,
+        });
+      assert.equal((await briefing(first)).status, 502);
+      assert.equal((await briefing(first)).status, 502);
+
+      // 다른 모임·다른 사용자라도 전체 한도가 다 차면 막혀요.
+      const limited = await briefing(second);
+      assert.equal(limited.status, 429);
+      assert.deepEqual(limited.body, {
+        error: "오늘은 AI 브리핑 이용이 많아 마감됐어요. 내일 다시 시도해 주세요.",
+        code: "daily_limit",
+      });
+      const events = await call(
+        baseUrl,
+        `/api/outings/${second.outing.outing.id}/summer-events`,
+        { method: "POST", token: second.session.token },
+      );
+      assert.equal(events.status, 429);
+      assert.deepEqual(events.body, {
+        error: "오늘은 AI 행사 검색 이용이 많아 마감됐어요. 내일 다시 찾아볼게요.",
+        code: "daily_limit",
+      });
+      assert.equal(openAiCalls, 2);
+    },
+    { fetchImpl, openAiApiKey: "test-key", aiGlobalDailyLimit: "2" },
+  );
+});
+
+test("날씨 갱신이 실패하면 이전 예보를 지키고 10분 뒤 다시 시도한다", async () => {
+  let clock = Date.now();
+  let failing = false;
+  const counter = { calls: 0 };
+  const succeed = forecastStub(counter);
+  const fetchImpl = async (url, options) => {
+    if (!failing) return succeed(url, options);
+    counter.calls += 1;
+    throw new Error("timeout");
+  };
+  await withServer(
+    async (baseUrl) => {
+      const created = await createTestOuting(baseUrl, {
+        startsAt: futureStartsAt(3),
+      });
+      const path = `/api/outings/${created.outing.outing.id}`;
+      const token = created.session.token;
+      assert.equal(created.outing.weatherStatus, "ok");
+      const goodWeather = created.outing.weather;
+      assert.ok(goodWeather);
+      assert.equal(counter.calls, 1);
+
+      failing = true;
+      clock += 31 * 60 * 1000;
+      const stale = await call(baseUrl, path, { token });
+      assert.equal(stale.body.weatherStatus, "ok");
+      assert.deepEqual(stale.body.weather, goodWeather);
+      assert.equal(counter.calls, 2);
+
+      // 실패 직후에는 다시 부르지 않고, 지킨 예보로 304도 돌려줘요.
+      clock += 5 * 60 * 1000;
+      const soon = await call(baseUrl, path, { token });
+      assert.deepEqual(soon.body.weather, goodWeather);
+      assert.equal(counter.calls, 2);
+      const notModified = await call(baseUrl, path, {
+        token,
+        headers: { "if-none-match": soon.headers.get("etag") },
+      });
+      assert.equal(notModified.status, 304);
+
+      clock += 6 * 60 * 1000;
+      const retried = await call(baseUrl, path, { token });
+      assert.deepEqual(retried.body.weather, goodWeather);
+      assert.equal(retried.body.weatherStatus, "ok");
+      assert.equal(counter.calls, 3);
+
+      failing = false;
+      clock += 11 * 60 * 1000;
+      const recovered = await call(baseUrl, path, { token });
+      assert.equal(recovered.body.weatherStatus, "ok");
+      assert.equal(counter.calls, 4);
+    },
+    { weatherEnabled: true, fetchImpl, now: () => clock },
+  );
+});
+
+test("날씨를 받는 사이 날짜가 바뀌거나 모임이 지워지면 캐시를 쓰지 않는다", async () => {
+  let clock = Date.now();
+  const counter = { calls: 0 };
+  const succeed = forecastStub(counter);
+  let hold = null;
+  const fetchImpl = async (url, options) => {
+    const gate = hold;
+    hold = null;
+    if (gate) {
+      gate.started();
+      await gate.released;
+    }
+    return succeed(url, options);
+  };
+  const holdNextFetch = () => {
+    const gate = {};
+    const started = new Promise((resolve) => {
+      gate.started = resolve;
+    });
+    gate.released = new Promise((resolve) => {
+      gate.release = resolve;
+    });
+    hold = gate;
+    return { started, release: () => gate.release() };
+  };
+  const dateIn = (days) => addDaysToDateKey(getKoreaDateKey(), days);
+
+  await withServer(
+    async (baseUrl) => {
+      const created = await createTestOuting(baseUrl, {
+        startsAt: futureStartsAt(3),
+      });
+      const path = `/api/outings/${created.outing.outing.id}`;
+      const token = created.session.token;
+      assert.equal(created.outing.weather.date, dateIn(3));
+
+      // 오래된 캐시를 갱신하는 GET이 Open-Meteo를 기다리는 동안 날짜를 바꿔요.
+      clock += 31 * 60 * 1000;
+      const gate = holdNextFetch();
+      const slowGet = call(baseUrl, path, { token });
+      await gate.started;
+      const moved = await call(baseUrl, path, {
+        method: "PATCH",
+        token,
+        body: { startsAt: futureStartsAt(5) },
+      });
+      assert.equal(moved.status, 200);
+      assert.equal(moved.body.outing.weather.date, dateIn(5));
+      gate.release();
+      assert.equal((await slowGet).status, 200);
+
+      const after = await call(baseUrl, path, { token });
+      assert.equal(after.body.outing.startsAt, futureStartsAt(5));
+      assert.equal(after.body.weather.date, dateIn(5));
+
+      // 갱신 중에 모임이 지워져도 FK 오류 없이 끝나요.
+      clock += 31 * 60 * 1000;
+      const deleteGate = holdNextFetch();
+      const slowGetBeforeDelete = call(baseUrl, path, { token });
+      await deleteGate.started;
+      const removed = await call(baseUrl, path, { method: "DELETE", token });
+      assert.equal(removed.status, 200);
+      deleteGate.release();
+      assert.equal((await slowGetBeforeDelete).status, 200);
+      assert.equal((await call(baseUrl, path, { token })).status, 404);
+    },
+    { weatherEnabled: true, fetchImpl, now: () => clock },
+  );
+});
+
+test("예전 서버가 저장한 50명 초과 인원은 50명으로 맞춘다", async () => {
+  const legacyRow = {
+    id: "out_legacy",
+    invite_code: "invite",
+    title: "예전 모임",
+    place_id: "seoul-forest",
+    place_name: "서울숲",
+    latitude: 37.5444,
+    longitude: 127.0374,
+    starts_at: futureStartsAt(3),
+    activity_type: "picnic",
+    created_at: new Date().toISOString(),
+  };
+  assert.equal(
+    mapOutingRow({ ...legacyRow, expected_people: 120 }).expectedPeople,
+    50,
+  );
+  assert.equal(
+    mapOutingRow({ ...legacyRow, expected_people: null }).expectedPeople,
+    2,
+  );
+
+  // Node 저장소도 시작할 때 D1 마이그레이션(0005)처럼 값을 맞춰요.
+  const dir = mkdtempSync(join(tmpdir(), "chaengyeosum-people-"));
+  const dbFile = join(dir, "legacy.db");
+  try {
+    let created;
+    await withServer(
+      async (baseUrl) => {
+        created = await createTestOuting(baseUrl);
+      },
+      { dbFile, cleanupIntervalMs: 0 },
+    );
+    const outingId = created.outing.outing.id;
+    const legacy = new DatabaseSync(dbFile);
+    legacy
+      .prepare("UPDATE outings SET expected_people = 120 WHERE id = ?")
+      .run(outingId);
+    legacy.close();
+
+    await withServer(
+      async (baseUrl) => {
+        const view = await call(baseUrl, `/api/outings/${outingId}`, {
+          token: created.session.token,
+        });
+        assert.equal(view.body.outing.expectedPeople, 50);
+      },
+      { dbFile, cleanupIntervalMs: 0 },
+    );
+    const check = new DatabaseSync(dbFile);
+    assert.equal(
+      check
+        .prepare("SELECT expected_people FROM outings WHERE id = ?")
+        .get(outingId).expected_people,
+      50,
+    );
+    check.close();
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
 });

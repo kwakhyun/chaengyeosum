@@ -37,7 +37,8 @@ import {
   errorForException,
   etagMatches,
   formatOutingEtag,
-  identityRateBucket,
+  globalAiRateLimit,
+  identityRateLimits,
   mapOutingRow,
   outingPlace,
   outingRateBucket,
@@ -46,6 +47,7 @@ import {
   pickClientIp,
   RATE_LIMITS,
   rateLimitWindowStart,
+  resolveTrustProxy,
 } from "./outing-rules.mjs";
 import {
   getCustomPlace,
@@ -68,7 +70,7 @@ import {
 } from "./summer-events.mjs";
 import {
   getCachedWeatherStamp,
-  getForecastWeather,
+  getForecastWeatherOrNull,
   getRegionalWeatherHighlights,
   getWeatherWindowStatus,
   resolveOutingWeather,
@@ -79,6 +81,8 @@ const MEMORY_CACHE_LIMIT = 500;
 const CROWD_CACHE_TTL_MS = 5 * 60 * 1000;
 const WEATHER_HIGHLIGHTS_TTL_MS = 30 * 60 * 1000;
 const CLEANUP_INTERVAL_MS = 24 * 60 * 60 * 1000;
+// 브라우저가 CORS preflight 결과를 10분 동안 재사용해요(WebKit 상한).
+const PREFLIGHT_MAX_AGE_SECONDS = "600";
 
 const BASE_HEADERS = {
   "access-control-allow-headers":
@@ -154,12 +158,27 @@ function credentials(request) {
   };
 }
 
-function clientIp(request) {
+/**
+ * 요청 한도에 쓰는 클라이언트 IP예요. 프록시 헤더는 클라이언트가 마음대로
+ * 보낼 수 있어서 trustProxy(TRUST_PROXY)가 켜져 있을 때만 읽어요. 앞단 프록시
+ * 수만큼 X-Forwarded-For 오른쪽에서 세고, cloudflare 모드에서만
+ * CF-Connecting-IP를 써요. 꺼져 있으면 소켓 주소예요.
+ */
+function clientIp(request, trustProxy) {
   return pickClientIp({
+    trustProxy,
     cfConnectingIp: header(request, "cf-connecting-ip"),
     forwardedFor: header(request, "x-forwarded-for"),
-    fallback: request.socket?.remoteAddress ?? "",
+    remoteAddress: request.socket?.remoteAddress ?? "",
   });
+}
+
+/** TRUST_PROXY 값을 읽어요. 알 수 없는 값이면 끄고 경고를 남겨요. */
+function trustProxyPolicy(value) {
+  const policy = resolveTrustProxy(value);
+  if (policy) return policy;
+  console.warn("trust_proxy_ignored", String(value));
+  return resolveTrustProxy(false);
 }
 
 async function readBody(request) {
@@ -200,7 +219,10 @@ export function createApiServer({
   seoulOpenDataApiKey = process.env.SEOUL_OPEN_DATA_API_KEY ?? "",
   now = () => Date.now(),
   cleanupIntervalMs = CLEANUP_INTERVAL_MS,
+  trustProxy = process.env.TRUST_PROXY,
+  aiGlobalDailyLimit = process.env.AI_GLOBAL_DAILY_LIMIT,
 }) {
+  const proxyPolicy = trustProxyPolicy(trustProxy);
   const store = createStore(dbFile);
   const aiBriefingCache = new BoundedCache();
   const crowdCache = new BoundedCache();
@@ -220,18 +242,24 @@ export function createApiServer({
     cleanupIntervalMs > 0 ? setInterval(runCleanup, cleanupIntervalMs) : null;
   cleanupTimer?.unref?.();
 
+  /**
+   * 한도 항목을 차례로 소비해요. identityLimit 항목은 IP 버킷과(있으면)
+   * 사용자 키 버킷으로 펼쳐요. 하나라도 넘으면 앞에서 올린 값은 되돌려요.
+   */
   async function consumeLimits(request, entries) {
-    const resolved = await Promise.all(
-      entries.map(async (entry) => ({
-        ...entry,
-        bucket:
-          entry.bucket ??
-          (await identityRateBucket(entry.identity, {
+    const resolved = [];
+    for (const entry of entries) {
+      if (entry.identity) {
+        resolved.push(
+          ...(await identityRateLimits(entry.identity, {
             userKey: anonymousUserKey(request),
-            ip: clientIp(request),
+            ip: clientIp(request, proxyPolicy),
           })),
-      })),
-    );
+        );
+      } else {
+        resolved.push(entry);
+      }
+    }
     const { limited } = store.consumeRateLimits(
       resolved,
       rateLimitWindowStart(now()),
@@ -240,19 +268,16 @@ export function createApiServer({
   }
 
   function identityLimit(config) {
-    return {
-      identity: config.bucket,
-      limit: config.limit,
-      error: "rate_limited",
-    };
+    return { identity: config };
   }
 
   function resolveWeather(outing, outingRow, nowMs) {
     return resolveOutingWeather({
       outing,
       readCache: () => weatherCacheFromRow(outingRow),
+      // 예보를 받는 동안 날짜·장소가 바뀌었으면 쓰지 않아요.
       writeCache: (payload, fetchedAt) =>
-        store.putWeatherCache(outing.id, payload, fetchedAt),
+        store.putWeatherCache(outing, payload, fetchedAt),
       fetchImpl,
       now: nowMs,
       enabled: weatherEnabled,
@@ -471,6 +496,9 @@ export function createApiServer({
         limit: AI_BRIEFING_DAILY_LIMIT,
         error: "ai_daily_limit",
       },
+      // 서비스 전체 한도가 다 찼을 때 뒤 버킷을 올렸다 되돌리는 쓰기가 없게
+      // 사람 기준 한도보다 먼저 확인해요.
+      globalAiRateLimit(aiGlobalDailyLimit, "ai_global_limit"),
       identityLimit(RATE_LIMITS.aiBriefing),
     ]);
     if (limited) return sendError(response, limited);
@@ -506,14 +534,17 @@ export function createApiServer({
     }
   }
 
-  async function getPlaceIntelligence(request, response, outingId) {
+  async function getPlaceIntelligence(request, response, outingId, url) {
     const access = requireParticipant(response, outingId, request);
     if (!access) return;
     const nowMs = now();
     const outing = mapOutingRow(access.outingRow, nowMs);
     const place = outingPlace(outing);
 
-    if (!isOutingToday(outing.startsAt, nowMs)) {
+    // 이미 출시된 앱은 basis를 모르고 늘 '지금' 혼잡도로 보여줘서,
+    // ?basis=outing을 보낸 요청에만 모임 시각 기준 예상을 돌려줘요.
+    const wantsOutingBasis = url?.searchParams.get("basis") === "outing";
+    if (wantsOutingBasis && !isOutingToday(outing.startsAt, nowMs)) {
       // 오늘이 아닌 모임은 모임 시각 기준으로 혼잡도를 예상해요.
       const crowd = estimateCrowd(place, {
         targetTime: new Date(startsAtMs(outing.startsAt)),
@@ -587,6 +618,9 @@ export function createApiServer({
         limit: SUMMER_EVENT_DAILY_LIMIT,
         error: "events_daily_limit",
       },
+      // 서비스 전체 한도가 다 찼을 때 뒤 버킷을 올렸다 되돌리는 쓰기가 없게
+      // 사람 기준 한도보다 먼저 확인해요.
+      globalAiRateLimit(aiGlobalDailyLimit, "events_global_limit"),
       identityLimit(RATE_LIMITS.summerEvents),
     ]);
     if (limited) return sendError(response, limited);
@@ -644,7 +678,7 @@ export function createApiServer({
     let weather = null;
     if (weatherStatus === "ok") {
       weather = weatherEnabled
-        ? await getForecastWeather(
+        ? await getForecastWeatherOrNull(
             {
               id: "preview",
               startsAt,
@@ -738,7 +772,7 @@ export function createApiServer({
     }
     const date = getKoreaDateKey(now());
     const weather = weatherEnabled
-      ? await getForecastWeather(
+      ? await getForecastWeatherOrNull(
           {
             id: `location-${latitude.toFixed(2)}-${longitude.toFixed(2)}`,
             startsAt: `${date}T12:00:00+09:00`,
@@ -838,13 +872,13 @@ export function createApiServer({
 
   async function getOutingSummaries(request, response) {
     const sessions = parseSummarySessions(await readBody(request));
-    json(response, 200, {
-      summaries: store.getOutingSummaries(
-        sessions,
-        anonymousUserKey(request),
-        now(),
-      ),
-    });
+    // missing: 삭제됐거나 보관 기간이 지나 모임 행이 없는 outingId예요.
+    const { summaries, missing } = store.getOutingSummaries(
+      sessions,
+      anonymousUserKey(request),
+      now(),
+    );
+    json(response, 200, { summaries, missing });
   }
 
   const routes = [
@@ -873,7 +907,9 @@ export function createApiServer({
 
   const server = createServer(async (request, response) => {
     if (request.method === "OPTIONS") {
-      empty(response, 204);
+      empty(response, 204, {
+        "access-control-max-age": PREFLIGHT_MAX_AGE_SECONDS,
+      });
       return;
     }
 
@@ -978,7 +1014,7 @@ export function createApiServer({
         if (request.method !== method) continue;
         const match = path.match(pattern);
         if (!match) continue;
-        await handler(request, response, ...match.slice(1));
+        await handler(request, response, ...match.slice(1), url);
         return;
       }
 

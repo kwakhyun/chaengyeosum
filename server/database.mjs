@@ -26,6 +26,7 @@ import {
 } from "./outing-rules.mjs";
 import {
   CLEANUP_SQL,
+  NORMALIZE_EXPECTED_PEOPLE_SQL,
   NORMALIZE_STARTS_AT_SQL,
   SQL,
   SUMMARY_SQL,
@@ -183,6 +184,7 @@ export function createStore(filename) {
       ON outings(starts_at);
   `);
   db.exec(NORMALIZE_STARTS_AT_SQL);
+  db.exec(NORMALIZE_EXPECTED_PEOPLE_SQL);
 
   const statementCache = new Map();
   function stmt(sql) {
@@ -616,8 +618,9 @@ export function createStore(filename) {
       .map((row) => mapMySessionRow(row, now));
   }
 
+  /** 결과: { summaries, missing } (missing은 모임 행이 없는 outingId 목록) */
   function getOutingSummaries(sessions, anonymousUserKey = "", now = Date.now()) {
-    if (sessions.length === 0) return [];
+    if (sessions.length === 0) return { summaries: [], missing: [] };
     const outingIds = sessions.map((session) => session.outingId);
     const tokenHashes = sessions.map((session) =>
       session.token ? tokenHash(session.token) : null,
@@ -627,7 +630,7 @@ export function createStore(filename) {
       ? tokenHash(anonymousUserKey)
       : null;
 
-    const { summaries, links } = assembleOutingSummaries({
+    const { summaries, links, missing } = assembleOutingSummaries({
       sessions,
       tokenHashes,
       anonymousHash,
@@ -657,7 +660,7 @@ export function createStore(filename) {
         anonymousHash,
       );
     }
-    return summaries;
+    return { summaries, missing };
   }
 
   /**
@@ -695,12 +698,21 @@ export function createStore(filename) {
     }
   }
 
-  function putWeatherCache(outingId, payload, fetchedAt = Date.now()) {
-    stmt(SQL.putWeather).run(
-      outingId,
+  /**
+   * 예보를 받을 때 쓴 모임(id·startsAt·latitude·longitude)이 그대로일 때만
+   * 캐시를 써요. 그사이 날짜·장소가 바뀌었거나 모임이 지워졌으면 건너뛰어요.
+   */
+  function putWeatherCache(outing, payload, fetchedAt = Date.now()) {
+    const result = stmt(SQL.putWeather).run(
+      outing.id,
       JSON.stringify(payload ?? null),
       fetchedAt,
+      outing.id,
+      outing.startsAt,
+      outing.latitude,
+      outing.longitude,
     );
+    return { written: changes(result) > 0 };
   }
 
   /** 180일 지난 모임과 오래된 사용량 기록을 지워요. */

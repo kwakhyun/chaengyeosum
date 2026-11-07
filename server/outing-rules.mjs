@@ -18,6 +18,8 @@ import {
   getQuantityPeople,
   getSmartPackingRecommendations,
   getSuggestedQuantity,
+  normalizeExpectedPeople,
+  parseCreateExpectedPeople,
   parseExpectedPeople,
 } from "./smart-packing.mjs";
 
@@ -43,12 +45,20 @@ export const AVATAR_KEYS = [
 ];
 const AUTO_AVATAR_KEYS = ["me", "minji", "junho", "seoyeon"];
 
+// limit은 사용자 키당, ipLimit은 IP당 하루 한도예요. 사용자 키는 클라이언트가
+// 보내는 값이라 바꿔 가며 보낼 수 있어서 IP 한도를 항상 함께 적용해요.
+// 통신사 NAT로 여러 사람이 같은 IP를 쓸 수 있어 IP 한도는 3배로 둬요.
 export const RATE_LIMITS = {
-  createOuting: { bucket: "create-outing", limit: 20 },
-  joinOuting: { bucket: "join-outing", limit: 60 },
-  aiBriefing: { bucket: "ai-briefing", limit: 20 },
-  summerEvents: { bucket: "summer-events", limit: 10 },
+  createOuting: { bucket: "create-outing", limit: 20, ipLimit: 60 },
+  joinOuting: { bucket: "join-outing", limit: 60, ipLimit: 180 },
+  aiBriefing: { bucket: "ai-briefing", limit: 20, ipLimit: 60 },
+  summerEvents: { bucket: "summer-events", limit: 10, ipLimit: 30 },
 };
+
+// AI 브리핑과 행사 검색이 함께 쓰는 서비스 전체 하루 OpenAI 호출 한도예요.
+// AI_GLOBAL_DAILY_LIMIT 환경 변수로 바꿀 수 있어요.
+export const AI_GLOBAL_BUCKET = "openai-global";
+export const DEFAULT_AI_GLOBAL_DAILY_LIMIT = 600;
 
 export const RETENTION = {
   outingDays: 180,
@@ -133,6 +143,11 @@ const ERROR_DEFINITIONS = {
     "오늘 AI 브리핑을 충분히 만들었어요. 내일 다시 만나요.",
     "daily_limit",
   ],
+  ai_global_limit: [
+    429,
+    "오늘은 AI 브리핑 이용이 많아 마감됐어요. 내일 다시 시도해 주세요.",
+    "daily_limit",
+  ],
   ai_failed: [502, "AI 브리핑을 만들지 못했어요. 잠시 후 다시 시도해 주세요."],
   events_unavailable: [
     503,
@@ -142,6 +157,11 @@ const ERROR_DEFINITIONS = {
   events_daily_limit: [
     429,
     "오늘 행사 검색을 충분히 했어요. 내일 다시 찾아볼게요.",
+    "daily_limit",
+  ],
+  events_global_limit: [
+    429,
+    "오늘은 AI 행사 검색 이용이 많아 마감됐어요. 내일 다시 찾아볼게요.",
     "daily_limit",
   ],
   events_failed: [
@@ -239,7 +259,11 @@ export function parseOutingInput(
     if (!partial && body.expectedPeople == null) {
       values.expectedPeople = DEFAULT_EXPECTED_PEOPLE;
     } else {
-      const expectedPeople = parseExpectedPeople(body.expectedPeople);
+      // 생성은 이미 출시된 앱(최대 999명)과 호환되도록 50명 초과를 50명으로
+      // 맞추고, 수정은 1~50명만 받아요.
+      const expectedPeople = partial
+        ? parseExpectedPeople(body.expectedPeople)
+        : parseCreateExpectedPeople(body.expectedPeople);
       if (expectedPeople == null) return { error: "invalid_people" };
       values.expectedPeople = expectedPeople;
     }
@@ -340,7 +364,8 @@ export function mapOutingRow(row, now = Date.now()) {
     longitude: row.longitude,
     startsAt: row.starts_at,
     activityType: row.activity_type,
-    expectedPeople: Number(row.expected_people ?? DEFAULT_EXPECTED_PEOPLE),
+    // 예전 서버가 저장한 50명 초과 값도 1~50명으로 맞춰 보여줘요.
+    expectedPeople: normalizeExpectedPeople(row.expected_people),
     isPast: isPastOuting(row.starts_at, now),
     createdAt: row.created_at,
   };
@@ -636,9 +661,15 @@ export function assembleOutingSummaries({
 
   const summaries = [];
   const links = [];
+  // 모임 행이 아예 없는(삭제됐거나 보관 기간이 지난) 모임이에요.
+  // 권한만 없는 모임은 넣지 않아요.
+  const missing = [];
   sessions.forEach((session, index) => {
     const outing = outingById.get(session.outingId);
-    if (!outing) return;
+    if (!outing) {
+      missing.push(session.outingId);
+      return;
+    }
     const hash = tokenHashes[index];
     const tokenRow = hash ? tokenRowByHash.get(hash) : null;
     const validTokenRow =
@@ -673,7 +704,7 @@ export function assembleOutingSummaries({
       isPast: isPastOuting(outing.starts_at, now),
     });
   });
-  return { summaries, links };
+  return { summaries, links, missing };
 }
 
 // ---------------------------------------------------------------------------
@@ -689,21 +720,188 @@ export async function sha256Hex(value) {
     .join("");
 }
 
-/** 익명 사용자 키가 있으면 그 키, 없으면 클라이언트 IP로 사람을 구분해요. */
-export function pickClientIp({ cfConnectingIp, forwardedFor, fallback }) {
-  const cf = typeof cfConnectingIp === "string" ? cfConnectingIp.trim() : "";
-  if (cf) return cf;
-  const forwarded =
-    typeof forwardedFor === "string"
-      ? forwardedFor.split(",")[0]?.trim()
-      : "";
-  if (forwarded) return forwarded;
-  return typeof fallback === "string" && fallback ? fallback : "unknown";
+const MAX_TRUSTED_PROXY_HOPS = 10;
+
+/**
+ * TRUST_PROXY 값을 읽어요.
+ * - 없음·`0`·`false`: 프록시 헤더를 믿지 않아요(소켓 주소).
+ * - `1`/`true`, `2`…: 앞단 프록시 수예요. X-Forwarded-For 오른쪽에서 센 값을 써요.
+ * - `cloudflare`: Cloudflare가 넣는 CF-Connecting-IP를 써요.
+ * 알 수 없는 값이면 null이에요(호출한 쪽이 끈 것으로 다뤄요).
+ */
+export function resolveTrustProxy(value) {
+  if (value === true) return { mode: "hops", hops: 1 };
+  if (value == null || value === false) return { mode: "off" };
+  if (typeof value === "object" && value.mode) return value;
+  const text = String(value).trim().toLowerCase();
+  if (["", "0", "false", "off", "no"].includes(text)) return { mode: "off" };
+  if (text === "true") return { mode: "hops", hops: 1 };
+  if (text === "cloudflare") return { mode: "cloudflare" };
+  if (/^\d+$/.test(text)) {
+    const hops = Number(text);
+    if (hops >= 1 && hops <= MAX_TRUSTED_PROXY_HOPS) {
+      return { mode: "hops", hops };
+    }
+  }
+  return null;
 }
 
-export async function identityRateBucket(action, { userKey, ip }) {
-  const identity = userKey ? `user:${userKey}` : `ip:${ip || "unknown"}`;
-  return `${action}:${await sha256Hex(identity)}`;
+/**
+ * 요청 한도에 쓸 클라이언트 IP를 골라요.
+ * 클라이언트는 X-Forwarded-For 왼쪽 값과 CF-Connecting-IP를 마음대로 보낼 수
+ * 있어요. 믿는 프록시는 자기가 본 주소를 오른쪽에 덧붙이므로 오른쪽에서
+ * hops번째 값을 써요(항목이 그보다 적으면 가장 왼쪽 값). CF-Connecting-IP는
+ * cloudflare 모드에서만 읽어요.
+ */
+export function pickClientIp({
+  trustProxy,
+  cfConnectingIp,
+  forwardedFor,
+  remoteAddress,
+}) {
+  const fallback =
+    typeof remoteAddress === "string" && remoteAddress ? remoteAddress : "";
+  const policy = resolveTrustProxy(trustProxy) ?? { mode: "off" };
+  if (policy.mode === "cloudflare") {
+    const cf = typeof cfConnectingIp === "string" ? cfConnectingIp.trim() : "";
+    return cf || fallback;
+  }
+  if (policy.mode === "hops") {
+    const hops =
+      typeof forwardedFor === "string"
+        ? forwardedFor
+            .split(",")
+            .map((part) => part.trim())
+            .filter(Boolean)
+        : [];
+    if (hops.length === 0) return fallback;
+    return hops[Math.max(0, hops.length - policy.hops)];
+  }
+  return fallback;
+}
+
+const IPV4_OCTET = "(?:25[0-5]|2[0-4]\\d|1\\d\\d|[1-9]?\\d)";
+const IPV4_PATTERN = new RegExp(`^${IPV4_OCTET}(?:\\.${IPV4_OCTET}){3}$`);
+
+/** IPv6 주소를 16비트 8개로 펼쳐요. 형식이 틀리면 null이에요. */
+function expandIpv6(value) {
+  let text = value;
+  const tail = [];
+  const lastColon = text.lastIndexOf(":");
+  if (lastColon >= 0 && text.includes(".", lastColon)) {
+    // ::ffff:192.0.2.1 처럼 끝에 IPv4가 붙은 형식이에요.
+    const ipv4 = text.slice(lastColon + 1);
+    if (!IPV4_PATTERN.test(ipv4)) return null;
+    const [a, b, c, d] = ipv4.split(".").map(Number);
+    tail.push((a << 8) | b, (c << 8) | d);
+    text = text.slice(0, lastColon + 1);
+    // "::"로 끝나지 않으면 앞 항목 뒤의 ':'만 남아요.
+    if (!text.endsWith("::")) text = text.slice(0, -1);
+  }
+  const halves = text.split("::");
+  if (halves.length > 2) return null;
+  const parse = (part) => (part ? part.split(":") : []);
+  const head = parse(halves[0]);
+  const rest = halves.length === 2 ? parse(halves[1]) : [];
+  const hextets = [...head, ...rest];
+  if (!hextets.every((hextet) => /^[0-9a-f]{1,4}$/.test(hextet))) return null;
+  const known = hextets.length + tail.length;
+  if (halves.length === 2 ? known > 7 : known !== 8) return null;
+  const zeros = Array(8 - known).fill(0);
+  return [
+    ...head.map((hextet) => parseInt(hextet, 16)),
+    ...(halves.length === 2 ? zeros : []),
+    ...rest.map((hextet) => parseInt(hextet, 16)),
+    ...tail,
+  ];
+}
+
+/**
+ * IP 한도 버킷 키예요.
+ * - IPv4는 주소 그대로예요(포트가 붙어 있으면 떼요).
+ * - IPv4에 매핑된 IPv6(::ffff:a.b.c.d)는 IPv4로 봐요.
+ * - IPv6는 /64(앞 16비트 4개)로 묶어요. 기기 한 대가 /64를 통째로 받는 일이
+ *   흔해 주소를 바꿔 가며 한도를 피하지 못하게 해요.
+ * - 알 수 없는 형식은 소문자로 바꿔 그대로 써요.
+ */
+export function rateLimitIpKey(value) {
+  let ip = typeof value === "string" ? value.trim().toLowerCase() : "";
+  if (!ip) return "";
+  const bracketed = /^\[([^\]]+)\](?::\d+)?$/.exec(ip);
+  if (bracketed) {
+    ip = bracketed[1];
+  } else {
+    const withPort = /^(\d{1,3}(?:\.\d{1,3}){3}):\d+$/.exec(ip);
+    if (withPort) ip = withPort[1];
+  }
+  const zone = ip.indexOf("%");
+  if (zone > 0) ip = ip.slice(0, zone);
+  if (IPV4_PATTERN.test(ip)) return ip;
+  const hextets = ip.includes(":") ? expandIpv6(ip) : null;
+  if (!hextets) return ip;
+  const mappedIpv4 =
+    hextets.slice(0, 5).every((hextet) => hextet === 0) &&
+    hextets[5] === 0xffff;
+  if (mappedIpv4) {
+    const [high, low] = hextets.slice(6);
+    return [high >> 8, high & 0xff, low >> 8, low & 0xff].join(".");
+  }
+  return `${hextets
+    .slice(0, 4)
+    .map((hextet) => hextet.toString(16))
+    .join(":")}::/64`;
+}
+
+/**
+ * 사람 기준 하루 한도 항목을 만들어요.
+ * - IP를 알면 IP 버킷(ipLimit)을 항상 소비해요.
+ * - 사용자 키가 있으면 사용자 키 버킷(limit)을 더해요.
+ * - 사용자 키가 없으면 IP 버킷만 적용해요(같은 IP에서 키 있는 요청과 같은
+ *   버킷·같은 한도라 키를 빼고 보내도 더 받을 수 없어요).
+ * - 둘 다 모르면 공용 'unknown' IP 버킷을 써요.
+ * - IP는 rateLimitIpKey로 맞춰요(IPv6는 /64 단위).
+ * IP 버킷을 먼저 둬 키를 바꿔 가며 보내는 요청이 새 행을 만들기 전에 막아요.
+ */
+export async function identityRateLimits(config, { userKey, ip }) {
+  const entries = [];
+  const clientIp = rateLimitIpKey(ip) || (userKey ? "" : "unknown");
+  if (clientIp) {
+    entries.push({
+      bucket: `${config.bucket}:${await sha256Hex(`ip:${clientIp}`)}`,
+      limit: config.ipLimit ?? config.limit,
+      error: "rate_limited",
+    });
+  }
+  if (userKey) {
+    entries.push({
+      bucket: `${config.bucket}:${await sha256Hex(`user:${userKey}`)}`,
+      limit: config.limit,
+      error: "rate_limited",
+    });
+  }
+  return entries;
+}
+
+/** 환경 변수 값을 1 이상 정수 한도로 읽어요. 아니면 기본값(600)이에요. */
+export function resolveAiGlobalDailyLimit(value) {
+  const parsed =
+    typeof value === "number"
+      ? value
+      : typeof value === "string" && /^\s*\d+\s*$/.test(value)
+        ? Number(value)
+        : Number.NaN;
+  return Number.isSafeInteger(parsed) && parsed >= 1
+    ? parsed
+    : DEFAULT_AI_GLOBAL_DAILY_LIMIT;
+}
+
+/** AI 브리핑·행사 검색이 함께 쓰는 서비스 전체 OpenAI 한도 항목이에요. */
+export function globalAiRateLimit(limit, error) {
+  return {
+    bucket: AI_GLOBAL_BUCKET,
+    limit: resolveAiGlobalDailyLimit(limit),
+    error,
+  };
 }
 
 export function outingRateBucket(action, outingId) {

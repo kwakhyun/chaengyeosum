@@ -60,6 +60,19 @@ function weatherLabel(code) {
   return "맑음";
 }
 
+/** Open-Meteo 호출 자체가 실패했어요(시간 초과·HTTP 오류·잘못된 응답). */
+export class WeatherFetchError extends Error {
+  constructor(reason) {
+    super(reason);
+    this.name = "WeatherFetchError";
+  }
+}
+
+/**
+ * 모임 날짜의 예보를 받아요.
+ * - 예보에 그 날짜가 없으면 null이에요(캐시해도 되는 결과).
+ * - 호출이 실패하면 WeatherFetchError를 던져요(이전 예보를 지킬 수 있게).
+ */
 export async function getForecastWeather(outing, fetchImpl = fetch) {
   const params = new URLSearchParams({
     latitude: String(outing.latitude),
@@ -75,6 +88,7 @@ export async function getForecastWeather(outing, fetchImpl = fetch) {
     forecast_days: "16",
   });
 
+  let daily;
   try {
     const response = await fetchImpl(
       `https://api.open-meteo.com/v1/forecast?${params}`,
@@ -82,26 +96,38 @@ export async function getForecastWeather(outing, fetchImpl = fetch) {
     );
     if (!response.ok) throw new Error(`weather_${response.status}`);
     const data = await response.json();
-    const dateKey = getOutingDateKey(outing.startsAt);
-    if (!dateKey) return null;
-    const index = data.daily?.time?.indexOf(dateKey) ?? -1;
-    if (index < 0) return null;
+    daily = data?.daily;
+    if (!Array.isArray(daily?.time)) throw new Error("weather_malformed");
+  } catch (error) {
+    throw new WeatherFetchError(error?.message ?? "weather_fetch_failed");
+  }
 
+  const dateKey = getOutingDateKey(outing.startsAt);
+  if (!dateKey) return null;
+  const index = daily.time.indexOf(dateKey);
+  if (index < 0) return null;
+
+  try {
     return {
       date: dateKey,
-      minTemperature: Math.round(data.daily.temperature_2m_min[index]),
-      maxTemperature: Math.round(data.daily.temperature_2m_max[index]),
+      minTemperature: Math.round(daily.temperature_2m_min[index]),
+      maxTemperature: Math.round(daily.temperature_2m_max[index]),
       precipitationProbability: Math.round(
-        data.daily.precipitation_probability_max[index] ?? 0,
+        daily.precipitation_probability_max[index] ?? 0,
       ),
-      uvIndex: Math.round(data.daily.uv_index_max[index] ?? 0),
-      uvLabel: uvLabel(data.daily.uv_index_max[index] ?? 0),
-      condition: weatherLabel(data.daily.weather_code[index] ?? 0),
+      uvIndex: Math.round(daily.uv_index_max[index] ?? 0),
+      uvLabel: uvLabel(daily.uv_index_max[index] ?? 0),
+      condition: weatherLabel(daily.weather_code[index] ?? 0),
       source: "Open-Meteo",
     };
   } catch {
-    return null;
+    throw new WeatherFetchError("weather_malformed");
   }
+}
+
+/** 실패와 '예보에 날짜 없음'을 구분하지 않아도 되는 곳(미리보기 등)에서 써요. */
+export function getForecastWeatherOrNull(outing, fetchImpl = fetch) {
+  return getForecastWeather(outing, fetchImpl).catch(() => null);
 }
 
 export async function getRegionalWeatherHighlights(fetchImpl = fetch) {
@@ -109,7 +135,7 @@ export async function getRegionalWeatherHighlights(fetchImpl = fetch) {
   const regions = await Promise.all(
     WEATHER_REGIONS.map(async (region) => ({
       ...region,
-      weather: await getForecastWeather(
+      weather: await getForecastWeatherOrNull(
         {
           id: `weather-${region.id}-${date}`,
           startsAt: `${date}T12:00:00+09:00`,
@@ -169,11 +195,20 @@ export function getCachedWeatherStamp({
   return Number(cacheFetchedAt);
 }
 
+/** 갱신에 실패해 이전 예보를 다시 쓸 때의 fetchedAt이에요(10분 뒤 재시도). */
+export function getWeatherRetryFetchedAt(now = Date.now()) {
+  return now - (WEATHER_CACHE_TTL_MS - WEATHER_FAILURE_TTL_MS);
+}
+
 /**
  * 모임 날씨를 캐시와 함께 계산해요.
  * - 예보 범위 밖이면 Open-Meteo를 부르지 않아요.
- * - 실패하면 null(=unavailable)을 10분 캐시해요.
+ * - 갱신이 실패하면 이전 예보가 있을 때는 그대로 두고 10분 뒤 다시 시도해요.
+ *   이전 예보가 없을 때만 null(=unavailable)을 10분 캐시해요.
  * - scheduleRefresh가 있으면 오래된 캐시를 먼저 돌려주고 뒤에서 갱신해요.
+ * - force면 캐시가 신선해도 바로 갱신해요(이전 예보는 실패 대비로 읽어요).
+ * - writeCache는 모임의 날짜·장소가 그대로일 때만 써야 해요
+ *   (SQL.putWeather 참고).
  */
 export async function resolveOutingWeather({
   outing,
@@ -183,6 +218,7 @@ export async function resolveOutingWeather({
   now = Date.now(),
   enabled = true,
   scheduleRefresh = null,
+  force = false,
 }) {
   const windowStatus = getWeatherWindowStatus(outing.startsAt, now);
   if (windowStatus !== "ok") {
@@ -192,22 +228,38 @@ export async function resolveOutingWeather({
     return { weather: null, weatherStatus: "unavailable", weatherStamp: 0 };
   }
 
+  const cached = await readCache();
+  const previous = cached?.payload ?? null;
+
   const refresh = async () => {
-    const weather = await getForecastWeather(outing, fetchImpl);
-    const fetchedAt = now;
-    await writeCache(weather ?? null, fetchedAt);
+    let weather;
+    try {
+      weather = await getForecastWeather(outing, fetchImpl);
+    } catch (error) {
+      if (!(error instanceof WeatherFetchError)) throw error;
+      if (previous) {
+        const retryFetchedAt = getWeatherRetryFetchedAt(now);
+        await writeCache(previous, retryFetchedAt);
+        return {
+          weather: previous,
+          weatherStatus: "ok",
+          weatherStamp: retryFetchedAt,
+        };
+      }
+      weather = null;
+    }
+    await writeCache(weather ?? null, now);
     return {
       weather: weather ?? null,
       weatherStatus: weather ? "ok" : "unavailable",
-      weatherStamp: fetchedAt,
+      weatherStamp: now,
     };
   };
 
-  const cached = await readCache();
-  if (cached) {
+  if (cached && !force) {
     const fromCache = {
-      weather: cached.payload ?? null,
-      weatherStatus: cached.payload ? "ok" : "unavailable",
+      weather: previous,
+      weatherStatus: previous ? "ok" : "unavailable",
       weatherStamp: Number(cached.fetchedAt),
     };
     if (isWeatherCacheFresh(cached.payload, cached.fetchedAt, now)) {
