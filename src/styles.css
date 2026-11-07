@@ -4638,11 +4638,10 @@ button:disabled {
 }
 
 .smart-recommendation-intro small {
-  overflow: hidden;
+  display: block;
   color: #6b7684;
   font-size: 11px;
-  text-overflow: ellipsis;
-  white-space: nowrap;
+  line-height: 1.45;
 }
 
 .invite-nudge {
@@ -6384,6 +6383,18 @@ button.ai-briefing-action {
 }
 
 /* ---------- 2026-11 UX 개선 ---------- */
+
+/* 긴 준비물 목록에서도 핵심 행동이 항상 보이게 해요. */
+.action-dock {
+  position: sticky;
+  z-index: 25;
+  bottom: 0;
+  box-shadow: 0 -8px 20px rgb(46 68 91 / 6%);
+}
+
+.outing-app .toast {
+  bottom: 112px;
+}
 
 .toast {
   text-align: left;

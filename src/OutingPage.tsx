@@ -311,6 +311,7 @@ export function OutingPage({
   const bundleRef = useRef<OutingBundle | null>(null);
   const [loading, setLoading] = useState(true);
   const [loadError, setLoadError] = useState("");
+  const [loadErrorCode, setLoadErrorCode] = useState("");
   const [connectionIssue, setConnectionIssue] = useState(false);
   const etagRef = useRef<string | null>(null);
   const pendingCountRef = useRef(0);
@@ -395,6 +396,9 @@ export function OutingPage({
           (refreshError.status === 403 || refreshError.status === 404);
         if (!bundleRef.current || gone) {
           setLoadError(message);
+          setLoadErrorCode(
+            refreshError instanceof ApiError ? refreshError.code : "",
+          );
         } else {
           // 이미 보고 있던 화면은 유지하고 연결 상태만 알려요.
           setConnectionIssue(true);
@@ -564,10 +568,21 @@ export function OutingPage({
   if (loading) return <LoadingScreen />;
 
   if (!bundle || loadError) {
+    const inviteExpired =
+      Boolean(inviteCodeRef.current) &&
+      (loadErrorCode === "invite_required" || loadErrorCode === "invalid_invite");
     return (
       <StateScreen
-        title={loadError || "모임을 찾지 못했어요."}
-        description="초대 링크를 다시 확인하거나 잠시 후 다시 시도해 주세요."
+        title={
+          inviteExpired
+            ? "초대 링크가 바뀌었거나 만료됐어요"
+            : loadError || "모임을 찾지 못했어요."
+        }
+        description={
+          inviteExpired
+            ? "모임장에게 새 초대 링크를 받아 다시 열어 주세요."
+            : "초대 링크를 다시 확인하거나 잠시 후 다시 시도해 주세요."
+        }
         actionLabel="다시 시도"
         onAction={() => {
           setLoading(true);
@@ -2457,7 +2472,10 @@ function OutingEditSheet({
             </button>
           ) : null}
           <PlacePicker
-            places={places}
+            places={[
+              ...places.filter((place) => place.id === outing.placeId),
+              ...places.filter((place) => place.id !== outing.placeId),
+            ]}
             value={placeId}
             onChange={(place) => setPlaceId(place.id)}
           />

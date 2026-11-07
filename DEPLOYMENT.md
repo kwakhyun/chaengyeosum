@@ -29,6 +29,10 @@ npm run deploy:worker
 
 새 마이그레이션은 `migrations`에 순번 SQL 파일로 추가한 뒤 위 순서대로 적용한다.
 
+`0005_revisions_rate_limits.sql`은 ETag용 `outings.revision`, 요청 제한 테이블, 조회 인덱스를 추가하고 기존 `starts_at`을 KST ISO 형식으로 정규화한다. 새 Worker는 이 컬럼과 테이블을 사용하므로 **반드시 마이그레이션을 먼저 적용한 뒤 배포**한다.
+
+`wrangler.toml`의 `[triggers] crons = ["17 19 * * *"]`(매일 04:17 KST)로 오래된 모임·캐시·요청 제한 기록을 정리한다. 로컬에서는 `npx wrangler dev --test-scheduled` 후 `/__scheduled`로 확인할 수 있다.
+
 ## 검증
 
 ```bash

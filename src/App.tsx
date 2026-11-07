@@ -474,6 +474,8 @@ function HomePage({
   const itemsTouchedRef = useRef(false);
   const customItemCountRef = useRef(0);
   const presetPlaceIdRef = useRef("yeouido-hangang");
+  // 사용자가 모임 이름을 직접 고치기 전까지는 장소·유형에 맞춰 이름을 제안해요.
+  const titleEditedRef = useRef(false);
   const [recommending, setRecommending] = useState(false);
   const [maxItems, setMaxItems] = useState(15);
   const [selectedItemKeys, setSelectedItemKeys] = useState<string[]>([]);
@@ -934,9 +936,24 @@ function HomePage({
     setError("");
     track("create_recommendations_reapplied");
   };
+  const suggestedTitle = (placeName: string, activityType: string) => {
+    const activityLabel =
+      activities.find((activity) => activity.key === activityType)?.label ??
+      "모임";
+    return `${placeName.replace(" 한강공원", " 한강")} ${activityLabel}`.slice(
+      0,
+      32,
+    );
+  };
   const selectPresetPlace = (place: Place) => {
     presetPlaceIdRef.current = place.id;
-    setForm((current) => ({ ...current, placeId: place.id }));
+    setForm((current) => ({
+      ...current,
+      placeId: place.id,
+      title: titleEditedRef.current
+        ? current.title
+        : suggestedTitle(place.name, current.activityType),
+    }));
     setError("");
   };
   const startCreateWithPreset = (preset: OutingSuggestion) => {
@@ -1631,12 +1648,13 @@ function HomePage({
                   required
                   maxLength={32}
                   value={form.title}
-                  onChange={(event) =>
+                  onChange={(event) => {
+                    titleEditedRef.current = true;
                     setForm((current) => ({
                       ...current,
                       title: event.target.value,
-                    }))
-                  }
+                    }));
+                  }}
                   placeholder="예: 한강 물놀이"
                 />
               </label>
