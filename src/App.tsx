@@ -1,5 +1,4 @@
 import {
-  useCallback,
   useEffect,
   useMemo,
   useRef,
@@ -8,74 +7,40 @@ import {
 } from "react";
 import {
   BackpackIcon,
-  BoxIcon,
   CalendarIcon,
-  CameraIcon,
   CheckIcon,
   ChevronLeftIcon,
   ChevronRightIcon,
-  CopyIcon,
   Cross2Icon,
-  DashboardIcon,
   GlobeIcon,
-  HeartIcon,
   HomeIcon,
-  LayersIcon,
-  LightningBoltIcon,
   MagicWandIcon,
   MagnifyingGlassIcon,
-  MobileIcon,
-  PersonIcon,
   PlusIcon,
   ReloadIcon,
-  RocketIcon,
-  ShuffleIcon,
-  SpeakerLoudIcon,
-  StarFilledIcon,
   SunIcon,
-  TokensIcon,
   TrashIcon,
 } from "@radix-ui/react-icons";
-import {
-  Analytics,
-  closeView,
-  getTossShareLink,
-  graniteEvent,
-  share,
-} from "@apps-in-toss/web-framework";
+import { closeView, graniteEvent } from "@apps-in-toss/web-framework";
 
 import {
-  addItem,
-  completeMyItems,
-  createAiBriefing,
   createOuting,
-  deleteItem,
   deleteOuting,
   getLocationWeather,
-  getPlaceIntelligence,
-  getPackingRecommendations,
   getOuting,
-  joinOuting,
-  listMySessions,
+  getOutingSummaries,
+  getPackingRecommendations,
   listCrowdHighlights,
   listItemOptions,
+  listMySessions,
   listPlaces,
   listWeatherHighlights,
-  randomizeItems,
-  searchSummerEvents,
   searchPlaces,
-  toggleEventReaction,
-  updateItem,
 } from "./api";
 import { initializeAnonymousUser } from "./anonymous-user";
-import {
-  getSharedDisplayName,
-  getTossUserDisplayName,
-  normalizeUserDisplayName,
-} from "./toss-user-profile";
-import { AiBriefingCard } from "./components/AiBriefingCard";
+import { summerTypeAvatarKey } from "./avatars";
 import { CrowdHighlightsCarousel } from "./components/CrowdHighlightsCarousel";
-import { PlaceIntelligenceCard } from "./components/PlaceIntelligenceCard";
+import { PlacePicker, waterActivityForCategory } from "./components/PlacePicker";
 import { PopularSummerPlaces } from "./components/PopularSummerPlaces";
 import { Sheet } from "./components/Sheet";
 import {
@@ -85,115 +50,56 @@ import {
   type SummerTypeKey,
   type SummerTypeResult,
 } from "./components/SummerTypeTest";
-import { SummerCrewBuilder } from "./components/SummerCrewBuilder";
+import {
+  SummerCrewBuilder,
+  type OutingSuggestion,
+} from "./components/SummerCrewBuilder";
 import { WeatherHighlightsCarousel } from "./components/WeatherHighlightsCarousel";
+import { OutingPage } from "./OutingPage";
+import {
+  APP_NAME,
+  shareContent,
+  track,
+  type ShareOutcome,
+} from "./platform";
 import {
   getSavedSessions,
-  getSession,
   mergeSessions,
   removeSession,
   replaceSessions,
   saveSession,
 } from "./session";
+import {
+  addDaysToDateKey,
+  daysUntil,
+  formatDateKey,
+  formatKoreaTime,
+  formatOutingDate,
+  isSummerSeason,
+  todayDateKey,
+} from "./time";
+import {
+  getSharedDisplayName,
+  getTossUserDisplayName,
+  normalizeUserDisplayName,
+} from "./toss-user-profile";
 import type {
   ActivityOption,
-  AiOutingBriefing,
   CrowdSignal,
   ItemOption,
-  OutingBundle,
-  OutingEvent,
+  OutingSummary,
   OutingWeather,
-  PackingItem,
-  Participant,
-  ParticipantSession,
   Place,
   RegionalWeather,
   SavedSession,
   SmartRecommendation,
-  SummerEventSearch,
+  WeatherStatus,
 } from "./types";
+import { activityIcon, errorMessage, ItemPicker } from "./ui";
 import "./styles.css";
 
-const APP_NAME = "chaengyeosum";
 const APP_BACK_EVENT = "chaengyeosum:back";
-const SHARE_OG_IMAGE_URL =
-  "https://chaengyeosum-mobile.khyun97.chatgpt.site/og.png";
-
-function getBriefingSnapshot(bundle: OutingBundle) {
-  return JSON.stringify({
-    outing: {
-      title: bundle.outing.title,
-      placeName: bundle.outing.placeName,
-      startsAt: bundle.outing.startsAt,
-      activityType: bundle.outing.activityType,
-      expectedPeople: bundle.outing.expectedPeople,
-    },
-    participantCount: bundle.participants.length,
-    weather: bundle.weather
-      ? {
-          maxTemperature: bundle.weather.maxTemperature,
-          precipitationProbability:
-            bundle.weather.precipitationProbability,
-          uvLabel: bundle.weather.uvLabel,
-          condition: bundle.weather.condition,
-        }
-      : null,
-    items: bundle.items.map((item) => ({
-      key: item.key,
-      assigned: item.owner != null,
-      done: item.done,
-      quantityLabel: item.quantityLabel,
-    })),
-  });
-}
-
-function hasTossBridge() {
-  return (
-    typeof (
-      window as Window & {
-        ReactNativeWebView?: { postMessage?: unknown };
-      }
-    ).ReactNativeWebView?.postMessage === "function"
-  );
-}
-
-function track(name: string, params: Record<string, string | number> = {}) {
-  if (!hasTossBridge()) return;
-  try {
-    void Analytics.click({ log_name: name, ...params });
-  } catch {
-    // 분석 실패가 핵심 흐름을 막지 않게 해요.
-  }
-}
-
-function getTomorrowInputValue() {
-  const tomorrow = new Date();
-  tomorrow.setDate(tomorrow.getDate() + 1);
-  return [
-    tomorrow.getFullYear(),
-    String(tomorrow.getMonth() + 1).padStart(2, "0"),
-    String(tomorrow.getDate()).padStart(2, "0"),
-  ].join("-");
-}
-
-function formatDateLabel(startsAt: string) {
-  const eventDate = new Date(startsAt);
-  const today = new Date();
-  const todayKey = new Date(
-    today.getFullYear(),
-    today.getMonth(),
-    today.getDate(),
-  ).valueOf();
-  const eventKey = new Date(
-    eventDate.getFullYear(),
-    eventDate.getMonth(),
-    eventDate.getDate(),
-  ).valueOf();
-  const dayDiff = Math.round((eventKey - todayKey) / 86_400_000);
-  const relative =
-    dayDiff === 0 ? "오늘" : dayDiff === 1 ? "내일" : dayDiff > 1 ? `D-${dayDiff}` : "지난 모임";
-  return `${relative} · ${eventDate.getMonth() + 1}월 ${eventDate.getDate()}일`;
-}
+const MAX_EXPECTED_PEOPLE = 50;
 
 function crowdHeadline(crowd: CrowdSignal | null) {
   if (!crowd) return "혼잡도를 확인해요";
@@ -201,243 +107,6 @@ function crowdHeadline(crowd: CrowdSignal | null) {
   if (crowd.level === "normal") return "무난해요";
   if (crowd.level === "busy") return "약간 붐벼요";
   return "많이 붐벼요";
-}
-
-function daysUntil(startsAt: string) {
-  const eventDate = new Date(startsAt);
-  const today = new Date();
-  return Math.round(
-    (new Date(
-      eventDate.getFullYear(),
-      eventDate.getMonth(),
-      eventDate.getDate(),
-    ).valueOf() -
-      new Date(
-        today.getFullYear(),
-        today.getMonth(),
-        today.getDate(),
-      ).valueOf()) /
-      86_400_000,
-  );
-}
-
-function activityIcon(activityType: string) {
-  if (activityType === "water-play") {
-    return <BackpackIcon aria-hidden="true" />;
-  }
-  if (activityType === "festival") {
-    return <SpeakerLoudIcon aria-hidden="true" />;
-  }
-  if (activityType === "camping") {
-    return <DashboardIcon aria-hidden="true" />;
-  }
-  if (activityType === "trip") {
-    return <RocketIcon aria-hidden="true" />;
-  }
-  return <SunIcon aria-hidden="true" />;
-}
-
-function avatarSrc(avatarKey: string) {
-  const allowed = new Set(["me", "minji", "junho", "seoyeon"]);
-  const safeKey = allowed.has(avatarKey) ? avatarKey : "me";
-  return `/assets/avatar-${safeKey}.png`;
-}
-
-function ItemVisual({
-  visual,
-  compact = false,
-}: {
-  visual: string;
-  compact?: boolean;
-}) {
-  if (visual.startsWith("asset:")) {
-    const filename = visual.slice("asset:".length).replaceAll("/", "");
-    return (
-      <img
-        className={compact ? "item-image item-image--compact" : "item-image"}
-        src={`/assets/${filename}`}
-        alt=""
-        draggable={false}
-      />
-    );
-  }
-
-  const iconName = visual.startsWith("icon:")
-    ? visual.slice("icon:".length)
-    : "custom";
-  const icon =
-    iconName === "sun" ? (
-      <SunIcon aria-hidden="true" />
-    ) : iconName === "backpack" ? (
-      <BackpackIcon aria-hidden="true" />
-    ) : iconName === "mobile" ? (
-      <MobileIcon aria-hidden="true" />
-    ) : iconName === "lightning" ? (
-      <LightningBoltIcon aria-hidden="true" />
-    ) : iconName === "camera" ? (
-      <CameraIcon aria-hidden="true" />
-    ) : iconName === "layers" ? (
-      <LayersIcon aria-hidden="true" />
-    ) : iconName === "heart" ? (
-      <HeartIcon aria-hidden="true" />
-    ) : iconName === "trash" ? (
-      <TrashIcon aria-hidden="true" />
-    ) : iconName === "magic-wand" ? (
-      <MagicWandIcon aria-hidden="true" />
-    ) : iconName === "cool" ? (
-      <DashboardIcon aria-hidden="true" />
-    ) : iconName === "speaker" ? (
-      <SpeakerLoudIcon aria-hidden="true" />
-    ) : iconName === "tokens" ? (
-      <TokensIcon aria-hidden="true" />
-    ) : (
-      <BoxIcon aria-hidden="true" />
-    );
-
-  return (
-    <span
-      className={`item-icon-visual${compact ? " item-icon-visual--compact" : ""}`}
-    >
-      {icon}
-    </span>
-  );
-}
-
-function ItemPicker({
-  options,
-  selectedKeys,
-  disabled,
-  recommendationReasons,
-  onToggle,
-}: {
-  options: ItemOption[];
-  selectedKeys: Set<string>;
-  disabled?: boolean;
-  recommendationReasons?: Map<string, string>;
-  onToggle: (option: ItemOption) => void;
-}) {
-  return (
-    <div className="item-option-grid">
-      {options.map((option) => {
-        const selected = selectedKeys.has(option.key);
-        return (
-          <button
-            className={`item-option${selected ? " is-selected" : ""}`}
-            type="button"
-            key={option.key}
-            aria-pressed={selected}
-            disabled={disabled}
-            onClick={() => onToggle(option)}
-          >
-            <ItemVisual visual={option.visual} compact />
-            <span>{option.label}</span>
-            {recommendationReasons?.has(option.key) ? (
-              <small>{recommendationReasons.get(option.key)}</small>
-            ) : null}
-            {selected ? (
-              <span className="item-option__check" aria-hidden="true">
-                <CheckIcon />
-              </span>
-            ) : null}
-          </button>
-        );
-      })}
-    </div>
-  );
-}
-
-function ProgressShareCard({ bundle }: { bundle: OutingBundle }) {
-  const readyCount = bundle.items.filter((item) => item.done).length;
-  const unassigned = bundle.items.filter((item) => item.owner == null);
-  const percent =
-    bundle.items.length > 0
-      ? Math.round((readyCount / bundle.items.length) * 100)
-      : 0;
-  const day = daysUntil(bundle.outing.startsAt);
-  const dayLabel =
-    day === 0 ? "오늘" : day > 0 ? `D-${day}` : "다녀온 모임";
-
-  return (
-    <article className="progress-share-card">
-      <div className="progress-share-card__top">
-        <span>{dayLabel}</span>
-        <b>챙겨썸</b>
-      </div>
-      <h3>{bundle.outing.title}</h3>
-      <p>
-        {readyCount}/{bundle.items.length}개 준비 완료
-        {unassigned.length > 0
-          ? ` · ${unassigned.length}개 주인 찾는 중`
-          : " · 담당자 모두 확정"}
-      </p>
-      <div
-        className="share-progress-track"
-        role="progressbar"
-        aria-label="공유 카드 준비 진행률"
-        aria-valuemin={0}
-        aria-valuemax={100}
-        aria-valuenow={percent}
-      >
-        <span style={{ width: `${percent}%` }} />
-      </div>
-      <div className="progress-share-card__bottom">
-        <div className="avatar-stack" aria-label="참여자">
-          {bundle.participants.slice(0, 4).map((participant) => (
-            <img
-              key={participant.id}
-              src={avatarSrc(participant.avatarKey)}
-              alt=""
-              draggable={false}
-            />
-          ))}
-        </div>
-        <span>
-          {unassigned.length > 0
-            ? `${unassigned
-                .slice(0, 2)
-                .map((item) => item.label)
-                .join("·")} 맡아줄래?`
-            : "준비 상황 같이 확인해요"}
-        </span>
-      </div>
-    </article>
-  );
-}
-
-function eventMessage(event: OutingEvent) {
-  const name = event.participant?.name ?? "친구";
-  const itemLabel = event.itemLabel ?? "준비물";
-  const lastCharacter = itemLabel.at(-1) ?? "";
-  const characterCode = lastCharacter.charCodeAt(0);
-  const hasFinalConsonant =
-    characterCode >= 0xac00 &&
-    characterCode <= 0xd7a3 &&
-    (characterCode - 0xac00) % 28 !== 0;
-  const itemWithObjectParticle = `${itemLabel}${hasFinalConsonant ? "을" : "를"}`;
-  if (event.type === "created") return `${name}님이 모임을 만들었어요`;
-  if (event.type === "joined") return `${name}님이 함께 준비해요`;
-  if (event.type === "claimed") {
-    return `${name}님이 ${itemWithObjectParticle} 맡았어요`;
-  }
-  if (event.type === "completed") {
-    return `${name}님이 ${event.itemLabel ?? "준비물"} 준비를 끝냈어요`;
-  }
-  if (event.type === "completed_mine") {
-    return `${name}님의 준비물이 모두 끝났어요`;
-  }
-  if (event.type === "randomized") {
-    return `${name}님이 ${event.itemLabel ?? "여러"}개를 랜덤 배정했어요`;
-  }
-  if (event.type === "item_added") {
-    return `${name}님이 ${itemWithObjectParticle} 추가했어요`;
-  }
-  if (event.type === "item_deleted") {
-    return `${name}님이 목록을 정리했어요`;
-  }
-  if (event.type === "reopened") {
-    return `${name}님이 ${itemWithObjectParticle} 다시 확인해요`;
-  }
-  return `${name}님이 준비 상태를 바꿨어요`;
 }
 
 function navigate(path: string) {
@@ -450,7 +119,6 @@ function currentOutingId() {
 }
 
 type HomeTab = "home" | "places" | "type" | "outings";
-type OutingDetailTab = "packing" | "briefing" | "activity";
 type CreateStep = 1 | 2 | 3 | 4;
 type UserCoordinates = {
   latitude: number;
@@ -518,25 +186,68 @@ const CREATE_STEPS: Array<{
   { key: 4, label: "확인", description: "마지막으로 확인해요." },
 ];
 
+function sessionView(session: SavedSession, summary?: OutingSummary) {
+  const startsAt = summary?.startsAt ?? session.startsAt;
+  return {
+    title: summary?.title ?? session.title,
+    placeName: summary?.placeName ?? session.placeName,
+    startsAt,
+    isPast: summary?.isPast ?? daysUntil(startsAt) < 0,
+  };
+}
+
+/** 다가오는 모임은 가까운 날짜순, 지난 모임은 최근순으로 나눠요. */
+function splitSessions(
+  sessions: SavedSession[],
+  summaries: Map<string, OutingSummary>,
+) {
+  const withView = sessions.map((session) => ({
+    session,
+    view: sessionView(session, summaries.get(session.outingId)),
+  }));
+  const time = (value: string) => Date.parse(value) || 0;
+  const upcoming = withView
+    .filter((entry) => !entry.view.isPast)
+    .sort((left, right) => time(left.view.startsAt) - time(right.view.startsAt))
+    .map((entry) => entry.session);
+  const past = withView
+    .filter((entry) => entry.view.isPast)
+    .sort((left, right) => time(right.view.startsAt) - time(left.view.startsAt))
+    .map((entry) => entry.session);
+  return { upcoming, past };
+}
+
 function OutingList({
   sessions,
   summaries,
   onOpenOuting,
   onDeleteOuting,
   deletingOutingId,
+  onCreate,
+  emptyTitle = "아직 모임이 없어요",
+  emptyDescription = "첫 모임을 만들면 여기에 모아드려요.",
 }: {
   sessions: SavedSession[];
   summaries: Map<string, OutingSummary>;
   onOpenOuting: (outingId: string) => void;
   onDeleteOuting?: (session: SavedSession) => void;
   deletingOutingId?: string | null;
+  onCreate?: () => void;
+  emptyTitle?: string;
+  emptyDescription?: string;
 }) {
   if (sessions.length === 0) {
     return (
       <div className="empty-card">
         <CalendarIcon aria-hidden="true" />
-        <strong>아직 만든 모임이 없어요</strong>
-        <span>첫 모임을 만들면 여기에 모아드려요.</span>
+        <strong>{emptyTitle}</strong>
+        <span>{emptyDescription}</span>
+        {onCreate ? (
+          <button className="empty-card__action" type="button" onClick={onCreate}>
+            <PlusIcon aria-hidden="true" />
+            새 모임 만들기
+          </button>
+        ) : null}
       </div>
     );
   }
@@ -545,13 +256,16 @@ function OutingList({
     <div className="outing-cards">
       {sessions.map((session) => {
         const summary = summaries.get(session.outingId);
+        const view = sessionView(session, summary);
         const percent =
           summary && summary.total > 0
             ? Math.round((summary.ready / summary.total) * 100)
             : 0;
         return (
           <article
-            className={`outing-card-row${onDeleteOuting ? " has-delete" : ""}`}
+            className={`outing-card-row${onDeleteOuting ? " has-delete" : ""}${
+              view.isPast ? " is-past" : ""
+            }`}
             key={session.outingId}
           >
             <button
@@ -563,9 +277,9 @@ function OutingList({
                 <CalendarIcon aria-hidden="true" />
               </span>
               <span className="outing-card__copy">
-                <strong>{session.title}</strong>
+                <strong>{view.title}</strong>
                 <span>
-                  {formatDateLabel(session.startsAt)} · {session.placeName}
+                  {formatOutingDate(view.startsAt)} · {view.placeName}
                 </span>
                 {summary ? (
                   <span className="outing-card__status">
@@ -574,9 +288,11 @@ function OutingList({
                     </i>
                     <b>
                       {summary.ready}/{summary.total} 준비
-                      {summary.unassigned > 0
-                        ? ` · ${summary.unassigned}개 주인 찾는 중`
-                        : ""}
+                      {!view.isPast && summary.myOpen > 0
+                        ? ` · 내 할 일 ${summary.myOpen}개`
+                        : !view.isPast && summary.unassigned > 0
+                          ? ` · ${summary.unassigned}개 주인 찾는 중`
+                          : ""}
                     </b>
                   </span>
                 ) : null}
@@ -587,7 +303,7 @@ function OutingList({
               <button
                 className="outing-card-delete"
                 type="button"
-                aria-label={`${session.title} 모임 삭제`}
+                aria-label={`${view.title} 모임 삭제`}
                 disabled={deletingOutingId === session.outingId}
                 onClick={() => onDeleteOuting(session)}
               >
@@ -601,12 +317,45 @@ function OutingList({
   );
 }
 
-type OutingSummary = {
-  ready: number;
-  total: number;
-  unassigned: number;
-  canDelete: boolean;
-};
+/** 요약 API가 없는 예전 서버에서도 동작하도록 모임별 조회로 대신해요. */
+async function loadOutingSummaries(
+  sessions: SavedSession[],
+): Promise<OutingSummary[]> {
+  if (sessions.length === 0) return [];
+  try {
+    const result = await getOutingSummaries(
+      sessions.map((session) => ({
+        outingId: session.outingId,
+        token: session.token,
+      })),
+    );
+    return result.summaries;
+  } catch {
+    const results = await Promise.allSettled(
+      sessions.map(async (saved): Promise<OutingSummary> => {
+        const bundle = await getOuting(saved.outingId, { token: saved.token });
+        const viewerId = bundle.viewer?.id;
+        return {
+          outingId: saved.outingId,
+          title: bundle.outing.title,
+          placeName: bundle.outing.placeName,
+          startsAt: bundle.outing.startsAt,
+          ready: bundle.items.filter((item) => item.done).length,
+          total: bundle.items.length,
+          unassigned: bundle.items.filter((item) => item.owner == null).length,
+          myOpen: bundle.items.filter(
+            (item) => item.owner?.id === viewerId && !item.done,
+          ).length,
+          canDelete: bundle.canDelete,
+          isPast: bundle.outing.isPast ?? daysUntil(bundle.outing.startsAt) < 0,
+        };
+      }),
+    );
+    return results.flatMap((result) =>
+      result.status === "fulfilled" ? [result.value] : [],
+    );
+  }
+}
 
 export default function App() {
   const [outingId, setOutingId] = useState(currentOutingId);
@@ -657,13 +406,33 @@ export default function App() {
   }, []);
 
   return outingId ? (
-    <OutingPage outingId={outingId} onHome={() => navigate("/")} />
+    <OutingPage
+      key={outingId}
+      outingId={outingId}
+      onHome={() => navigate("/")}
+    />
   ) : (
     <HomePage
       anonymousUser={anonymousUser}
       onOpenOuting={(id) => navigate(`/outing/${id}`)}
     />
   );
+}
+
+function describeRecommendationWeather(
+  weather: OutingWeather | null,
+  status: WeatherStatus | undefined,
+) {
+  if (weather) {
+    return `${weather.maxTemperature}℃ · ${weather.condition} ${weather.precipitationProbability}% · ${weather.uvLabel}`;
+  }
+  if (status === "out_of_range") {
+    return "예보는 출발 15일 전부터 반영돼요. 지금은 활동과 장소에 맞춰 골랐어요";
+  }
+  if (status === "unavailable") {
+    return "예보를 잠시 불러오지 못해 활동과 장소에 맞춰 골랐어요";
+  }
+  return "활동과 장소에 맞춰 준비물을 골랐어요";
 }
 
 function HomePage({
@@ -701,6 +470,10 @@ function HomePage({
     SmartRecommendation[]
   >([]);
   const [weatherPreview, setWeatherPreview] = useState("");
+  const [itemsTouched, setItemsTouched] = useState(false);
+  const itemsTouchedRef = useRef(false);
+  const customItemCountRef = useRef(0);
+  const presetPlaceIdRef = useRef("yeouido-hangang");
   const [recommending, setRecommending] = useState(false);
   const [maxItems, setMaxItems] = useState(15);
   const [selectedItemKeys, setSelectedItemKeys] = useState<string[]>([]);
@@ -724,13 +497,16 @@ function HomePage({
   const [placeSearching, setPlaceSearching] = useState(false);
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState("");
-  const [form, setForm] = useState({
-    title: "한강 물놀이",
-    date: getTomorrowInputValue(),
-    placeId: "yeouido-hangang",
-    activityType: "water-play",
-    expectedPeople: 4,
-    creatorName: "",
+  const [form, setForm] = useState(() => {
+    const summer = isSummerSeason();
+    return {
+      title: summer ? "한강 물놀이" : "한강 피크닉",
+      date: addDaysToDateKey(todayDateKey(), 1),
+      placeId: "yeouido-hangang",
+      activityType: summer ? "water-play" : "picnic",
+      expectedPeople: 4,
+      creatorName: "",
+    };
   });
   const [tossDisplayName, setTossDisplayName] = useState("");
   const [expectedPeopleDraft, setExpectedPeopleDraft] = useState("4");
@@ -769,11 +545,8 @@ function HomePage({
     const localSessions = anonymousUser.canLinkLocalSessions
       ? getSavedSessions()
       : [];
-    Promise.allSettled(
-      localSessions.map((session) =>
-        getOuting(session.outingId, { token: session.token }),
-      ),
-    )
+    // 요약 조회가 로컬 참여 토큰을 토스 익명 사용자와 연결해요.
+    loadOutingSummaries(localSessions)
       .then(() => listMySessions())
       .then((result) => {
         if (cancelled) return;
@@ -955,30 +728,10 @@ function HomePage({
       return;
     }
     let cancelled = false;
-    Promise.allSettled(
-      sessions.map(async (saved) => {
-        const bundle = await getOuting(saved.outingId, {
-          token: saved.token,
-        });
-        return [
-          saved.outingId,
-          {
-            ready: bundle.items.filter((item) => item.done).length,
-            total: bundle.items.length,
-            unassigned: bundle.items.filter((item) => item.owner == null)
-              .length,
-            canDelete: bundle.canDelete,
-          },
-        ] as const;
-      }),
-    ).then((results) => {
+    void loadOutingSummaries(sessions).then((summaries) => {
       if (cancelled) return;
       setOutingSummaries(
-        new Map(
-          results.flatMap((result) =>
-            result.status === "fulfilled" ? [result.value] : [],
-          ),
-        ),
+        new Map(summaries.map((summary) => [summary.outingId, summary])),
       );
     });
     return () => {
@@ -1044,15 +797,16 @@ function HomePage({
         .then((result) => {
           if (cancelled) return;
           setSmartRecommendations(result.recommendations);
-          setSelectedItemKeys(
-            result.recommendations
-              .map((recommendation) => recommendation.key)
-              .slice(0, maxItems),
-          );
+          // 사용자가 직접 고친 선택은 추천값으로 덮어쓰지 않아요.
+          if (!itemsTouchedRef.current) {
+            setSelectedItemKeys(
+              result.recommendations
+                .map((recommendation) => recommendation.key)
+                .slice(0, Math.max(0, maxItems - customItemCountRef.current)),
+            );
+          }
           setWeatherPreview(
-            result.weather
-              ? `${result.weather.maxTemperature}℃ · ${result.weather.condition} ${result.weather.precipitationProbability}% · ${result.weather.uvLabel}`
-              : "활동 유형에 맞춰 준비물을 골랐어요",
+            describeRecommendationWeather(result.weather, result.weatherStatus),
           );
           setError("");
         })
@@ -1083,6 +837,10 @@ function HomePage({
     selectedCustomPlaceName,
   ]);
 
+  useEffect(() => {
+    customItemCountRef.current = customItems.length;
+  }, [customItems.length]);
+
   const itemCount = selectedItemKeys.length + customItems.length;
   const selectedActivity =
     activities.find((activity) => activity.key === form.activityType) ?? null;
@@ -1097,7 +855,10 @@ function HomePage({
     ...customItems,
   ];
   const updateExpectedPeople = (value: number) => {
-    const normalized = Math.min(999, Math.max(1, Math.round(value) || 1));
+    const normalized = Math.min(
+      MAX_EXPECTED_PEOPLE,
+      Math.max(1, Math.round(value) || 1),
+    );
     setExpectedPeopleDraft(String(normalized));
     setForm((current) => ({
       ...current,
@@ -1159,19 +920,44 @@ function HomePage({
       );
     });
   };
-  const startCreateAtPlace = (place: Place) => {
-    const waterActivity = ["waterpark", "beach", "valley"].includes(
-      place.category ?? "",
+  const markItemsTouched = (touched: boolean) => {
+    itemsTouchedRef.current = touched;
+    setItemsTouched(touched);
+  };
+  const applyRecommendedItems = () => {
+    markItemsTouched(false);
+    setSelectedItemKeys(
+      smartRecommendations
+        .map((recommendation) => recommendation.key)
+        .slice(0, Math.max(0, maxItems - customItems.length)),
     );
+    setError("");
+    track("create_recommendations_reapplied");
+  };
+  const selectPresetPlace = (place: Place) => {
+    presetPlaceIdRef.current = place.id;
+    setForm((current) => ({ ...current, placeId: place.id }));
+    setError("");
+  };
+  const startCreateWithPreset = (preset: OutingSuggestion) => {
     setCustomPlaceMode(false);
     setSelectedCustomPlace(null);
+    if (preset.placeId) presetPlaceIdRef.current = preset.placeId;
     setForm((current) => ({
       ...current,
+      title: preset.title.slice(0, 32),
+      placeId: preset.placeId ?? current.placeId,
+      activityType: preset.activityType,
+    }));
+    openCreateSheet();
+  };
+  const startCreateAtPlace = (place: Place) => {
+    const waterActivity = waterActivityForCategory(place.category);
+    startCreateWithPreset({
       title: `${place.name} ${waterActivity ? "물놀이" : "피크닉"}`,
       placeId: place.id,
       activityType: waterActivity ? "water-play" : "picnic",
-    }));
-    openCreateSheet();
+    });
     track("popular_summer_place_selected", { place_id: place.id });
   };
 
@@ -1250,6 +1036,7 @@ function HomePage({
 
   const toggleCreateItem = (option: ItemOption) => {
     setError("");
+    markItemsTouched(true);
     setSelectedItemKeys((current) => {
       if (current.includes(option.key)) {
         return current.filter((key) => key !== option.key);
@@ -1277,6 +1064,7 @@ function HomePage({
       setError(`준비물은 최대 ${maxItems}개까지 고를 수 있어요.`);
       return;
     }
+    markItemsTouched(true);
     setCustomItems((current) => [...current, label]);
     setCustomDraft("");
     setError("");
@@ -1297,8 +1085,11 @@ function HomePage({
         itemKeys: selectedItemKeys,
         customItems,
         customPlace: selectedCustomPlace ?? undefined,
+        avatarKey: summerTypeAvatarKey(mySummerType),
       });
       saveSession(created.session, created.outing.outing);
+      markItemsTouched(false);
+      setCustomItems([]);
       track("outing_created", {
         place_id: form.placeId,
       });
@@ -1306,11 +1097,7 @@ function HomePage({
       closeCreateSheet();
       onOpenOuting(created.outing.outing.id);
     } catch (submitError) {
-      setError(
-        submitError instanceof Error
-          ? submitError.message
-          : "모임을 만들지 못했어요.",
-      );
+      setError(errorMessage(submitError, "모임을 만들지 못했어요."));
     } finally {
       setSubmitting(false);
     }
@@ -1318,57 +1105,38 @@ function HomePage({
 
   const shareSummerType = async (
     result: SummerTypeResult,
-  ): Promise<"shared" | "copied"> => {
+  ): Promise<ShareOutcome> => {
     const displayName = normalizeUserDisplayName(
       await resolveTossDisplayName(),
     );
     const shareParams = new URLSearchParams({ summerType: result.key });
     if (displayName) shareParams.set("summerName", displayName);
-    const deepLink = `intoss://${APP_NAME}?${shareParams.toString()}`;
-    const webLink = `${window.location.origin}/?${shareParams.toString()}`;
     const message = [
       `🌞 ${displayName ? `${displayName}님의` : "내"} 여름 준비 캐릭터는 ‘${result.name}’`,
       `시그니처 준비물은 ${result.signatureItem}!`,
       "너는 8종 캐릭터 중 어떤 유형인지 1분 만에 확인해봐 👇",
     ].join("\n");
-    let shareResult: "shared" | "copied" = "copied";
-
+    let files: File[] | undefined;
     try {
-      if (hasTossBridge()) {
-        const tossLink = await getTossShareLink(
-          deepLink,
-          SHARE_OG_IMAGE_URL,
-        );
-        await share({ message: `${message}\n\n${tossLink}` });
-        shareResult = "shared";
-      } else if (window.navigator.share) {
-        const imageResponse = await fetch(result.image);
-        const imageBlob = await imageResponse.blob();
-        const imageFile = new File(
-          [imageBlob],
-          `chaengyeosum-${result.key}.webp`,
-          { type: imageBlob.type || "image/webp" },
-        );
-        const canShareImage =
-          typeof window.navigator.canShare === "function" &&
-          window.navigator.canShare({ files: [imageFile] });
-        await window.navigator.share({
-          title: `챙겨썸 | ${result.name}`,
-          text: message,
-          url: webLink,
-          ...(canShareImage ? { files: [imageFile] } : {}),
-        });
-        shareResult = "shared";
-      } else {
-        await window.navigator.clipboard.writeText(`${message}\n\n${webLink}`);
-      }
+      const imageResponse = await fetch(result.image);
+      const imageBlob = await imageResponse.blob();
+      files = [
+        new File([imageBlob], `chaengyeosum-${result.key}.webp`, {
+          type: imageBlob.type || "image/webp",
+        }),
+      ];
     } catch {
-      await window.navigator.clipboard?.writeText(`${message}\n\n${webLink}`);
-    } finally {
-      track("summer_type_shared", { result: result.key });
+      files = undefined;
     }
-
-    return shareResult;
+    const outcome = await shareContent({
+      title: `챙겨썸 | ${result.name}`,
+      message,
+      deepLink: `intoss://${APP_NAME}?${shareParams.toString()}`,
+      webLink: `${window.location.origin}/?${shareParams.toString()}`,
+      files,
+    });
+    track("summer_type_shared", { result: result.key, outcome });
+    return outcome;
   };
   const featuredCrowdPlace =
     rotatingHomePlaces[homeHighlightIndex] ??
@@ -1416,12 +1184,25 @@ function HomePage({
         ? `${nearestWeatherRegion.name} 근처`
         : "서울 날씨";
   const featuredFreshnessLabel = featuredCrowd
-    ? `${featuredCrowd.observedAt.slice(11, 16)} 기준 · ${
+    ? `${formatKoreaTime(featuredCrowd.observedAt)} 기준 · ${
         featuredCrowd.mode === "live" ? "서울 실시간" : "시간대 예상"
       }`
     : crowdHighlightsLoading
       ? "혼잡 정보를 불러오는 중"
       : "장소별 혼잡 정보 확인";
+
+  const { upcoming: upcomingSessions, past: pastSessions } = splitSessions(
+    sessions,
+    outingSummaries,
+  );
+  const nextSession = upcomingSessions[0] ?? null;
+  const summerSeason = isSummerSeason();
+  const outingsShortcutLabel =
+    sessions.length === 0
+      ? "첫 모임을 만들어보세요"
+      : upcomingSessions.length > 0
+        ? `${upcomingSessions.length}개 모임 준비 중`
+        : "지난 모임 다시 보기";
 
   return (
     <main className="app home-app" aria-label="챙겨썸">
@@ -1436,11 +1217,15 @@ function HomePage({
             />
             <div className="home-hero__content">
               <h1>
-                이번 여름 모임,
+                {summerSeason ? "이번 여름 모임," : "다가오는 모임,"}
                 <br />
                 같이 챙겨요
               </h1>
-              <p>모임을 만들고 친구들과 준비물을 나눠 맡아보세요.</p>
+              <p>
+                {summerSeason
+                  ? "모임을 만들고 친구들과 준비물을 나눠 맡아보세요."
+                  : "날씨에 맞는 준비물을 추천받고 친구들과 나눠 맡아보세요."}
+              </p>
               <button
                 className="home-primary"
                 type="button"
@@ -1531,22 +1316,22 @@ function HomePage({
                 />
                 <span className="home-shortcut__content">
                   <strong>내 모임</strong>
-                  <small>{sessions.length}개 모임 준비 중</small>
+                  <small>{outingsShortcutLabel}</small>
                 </span>
                 <ChevronRightIcon aria-hidden="true" />
               </button>
             </div>
 
-            {sessions.length > 0 ? (
+            {nextSession ? (
               <div className="home-next-outing">
                 <div>
-                  <strong>최근 모임</strong>
+                  <strong>다가오는 모임</strong>
                   <button type="button" onClick={() => selectTab("outings")}>
                     모두 보기
                   </button>
                 </div>
                 <OutingList
-                  sessions={sessions.slice(0, 1)}
+                  sessions={[nextSession]}
                   summaries={outingSummaries}
                   onOpenOuting={onOpenOuting}
                 />
@@ -1626,6 +1411,7 @@ function HomePage({
             sharedName={sharedSummerName}
             onResolveMyName={resolveTossDisplayName}
             onTrack={track}
+            onCreateOuting={(suggestion) => startCreateWithPreset(suggestion)}
           />
         </section>
       ) : null}
@@ -1638,7 +1424,9 @@ function HomePage({
           <header className="home-tab-header home-tab-header--with-action">
             <div>
               <p className="eyebrow">MY SUMMER</p>
-              <h1 id="outings-tab-title">내 여름 모임</h1>
+              <h1 id="outings-tab-title">
+                {summerSeason ? "내 여름 모임" : "내 모임"}
+              </h1>
               <span>준비 중인 모임과 친구들의 진행률을 확인해요.</span>
             </div>
             <button
@@ -1649,22 +1437,44 @@ function HomePage({
               <PlusIcon aria-hidden="true" />
             </button>
           </header>
-          <div className="outing-tab-count">
-            <span>전체</span>
-            <strong>{sessions.length}개</strong>
-          </div>
           {deleteNotice ? (
             <p className="outing-delete-notice" role="status">
               {deleteNotice}
             </p>
           ) : null}
+          <div className="outing-tab-count">
+            <span>다가오는 모임</span>
+            <strong>{upcomingSessions.length}개</strong>
+          </div>
           <OutingList
-            sessions={sessions}
+            sessions={upcomingSessions}
             summaries={outingSummaries}
             onOpenOuting={onOpenOuting}
             onDeleteOuting={requestDeleteOuting}
             deletingOutingId={deletingOutingId}
+            onCreate={openCreateSheet}
+            emptyTitle={
+              pastSessions.length > 0
+                ? "다가오는 모임이 없어요"
+                : "아직 모임이 없어요"
+            }
+            emptyDescription="모임을 만들면 친구들과 준비물을 나눠 맡을 수 있어요."
           />
+          {pastSessions.length > 0 ? (
+            <>
+              <div className="outing-tab-count outing-tab-count--past">
+                <span>지난 모임</span>
+                <strong>{pastSessions.length}개</strong>
+              </div>
+              <OutingList
+                sessions={pastSessions}
+                summaries={outingSummaries}
+                onOpenOuting={onOpenOuting}
+                onDeleteOuting={requestDeleteOuting}
+                deletingOutingId={deletingOutingId}
+              />
+            </>
+          ) : null}
         </section>
       ) : null}
 
@@ -1724,7 +1534,7 @@ function HomePage({
               <strong>{deleteTarget?.title}</strong>
               <small>
                 {deleteTarget
-                  ? `${formatDateLabel(deleteTarget.startsAt)} · ${deleteTarget.placeName}`
+                  ? `${formatOutingDate(deleteTarget.startsAt)} · ${deleteTarget.placeName}`
                   : ""}
               </small>
             </span>
@@ -1836,7 +1646,8 @@ function HomePage({
                   <input
                     required
                     type="date"
-                    min={new Date().toISOString().slice(0, 10)}
+                    min={todayDateKey()}
+                    max={addDaysToDateKey(todayDateKey(), 365)}
                     value={form.date}
                     onChange={(event) =>
                       setForm((current) => ({
@@ -1919,7 +1730,7 @@ function HomePage({
                       type="number"
                       inputMode="numeric"
                       min={1}
-                      max={999}
+                      max={MAX_EXPECTED_PEOPLE}
                       value={expectedPeopleDraft}
                       aria-label="함께 가는 인원수"
                       onChange={(event) => {
@@ -1929,7 +1740,7 @@ function HomePage({
                           setForm((current) => ({
                             ...current,
                             expectedPeople: Math.min(
-                              999,
+                              MAX_EXPECTED_PEOPLE,
                               Math.max(1, Math.round(Number(value))),
                             ),
                           }));
@@ -1944,7 +1755,7 @@ function HomePage({
                   <button
                     type="button"
                     aria-label="인원 한 명 늘리기"
-                    disabled={form.expectedPeople >= 999}
+                    disabled={form.expectedPeople >= MAX_EXPECTED_PEOPLE}
                     onClick={() =>
                       updateExpectedPeople(form.expectedPeople + 1)
                     }
@@ -1965,9 +1776,12 @@ function HomePage({
                     onClick={() => {
                       setCustomPlaceMode(false);
                       setSelectedCustomPlace(null);
+                      // 직접 검색 전에 골랐던 추천 장소로 돌아가요.
                       setForm((current) => ({
                         ...current,
-                        placeId: places[0]?.id ?? "yeouido-hangang",
+                        placeId:
+                          presetPlaceIdRef.current ||
+                          (places[0]?.id ?? "yeouido-hangang"),
                       }));
                     }}
                   >
@@ -2039,26 +1853,12 @@ function HomePage({
                     )}
                   </div>
                 ) : (
-                  <select
-                    required
-                    aria-label="장소"
+                  <PlacePicker
+                    places={places}
                     value={form.placeId}
-                    onChange={(event) =>
-                      setForm((current) => ({
-                        ...current,
-                        placeId: event.target.value,
-                      }))
-                    }
-                  >
-                    {places.map((place) => (
-                      <option key={place.id} value={place.id}>
-                        {place.name}
-                        {place.currentCrowd
-                          ? ` · ${place.currentCrowd.label}`
-                          : ""}
-                      </option>
-                    ))}
-                  </select>
+                    onChange={selectPresetPlace}
+                    userLocation={userLocation}
+                  />
                 )}
               </fieldset>
             </section>
@@ -2072,7 +1872,7 @@ function HomePage({
               <div className="create-step-heading">
                 <span>STEP 3</span>
                 <h3 id="create-items-title">무엇을 함께 챙길까요?</h3>
-                <p>AI 추천 목록에서 필요한 것만 골라보세요.</p>
+                <p>날씨·장소·인원에 맞춘 추천에서 필요한 것만 골라보세요.</p>
               </div>
               <div className="smart-recommendation-intro" role="status">
                 <span>
@@ -2082,12 +1882,24 @@ function HomePage({
                   <strong>
                     {recommending
                       ? "날씨를 확인하고 있어요"
-                      : "날씨와 활동에 맞춰 골랐어요"}
+                      : itemsTouched
+                        ? "직접 고른 준비물을 유지하고 있어요"
+                        : "날씨와 활동에 맞춰 골랐어요"}
                   </strong>
                   <small>
                     {weatherPreview || "추천 준비물을 준비 중이에요"}
                   </small>
                 </div>
+                {itemsTouched && smartRecommendations.length > 0 ? (
+                  <button
+                    className="smart-recommendation-intro__reset"
+                    type="button"
+                    onClick={applyRecommendedItems}
+                  >
+                    <ReloadIcon aria-hidden="true" />
+                    추천대로
+                  </button>
+                ) : null}
               </div>
               <div className="item-picker-heading">
                 <div>
@@ -2138,11 +1950,14 @@ function HomePage({
                         type="button"
                         aria-label={`${item} 삭제`}
                         onClick={() =>
-                          setCustomItems((current) =>
-                            current.filter(
-                              (currentItem) => currentItem !== item,
-                            ),
-                          )
+                          {
+                            markItemsTouched(true);
+                            setCustomItems((current) =>
+                              current.filter(
+                                (currentItem) => currentItem !== item,
+                              ),
+                            );
+                          }
                         }
                       >
                         <Cross2Icon aria-hidden="true" />
@@ -2293,1433 +2108,6 @@ function HomePage({
           </div>
         </form>
       </Sheet>
-    </main>
-  );
-}
-
-function OutingPage({
-  outingId,
-  onHome,
-}: {
-  outingId: string;
-  onHome: () => void;
-}) {
-  const inviteCode = new URLSearchParams(window.location.search).get("invite");
-  const [session, setSession] = useState<ParticipantSession | null>(() =>
-    getSession(outingId),
-  );
-  const [bundle, setBundle] = useState<OutingBundle | null>(null);
-  const [selectedItem, setSelectedItem] = useState<PackingItem | null>(null);
-  const [manageOpen, setManageOpen] = useState(false);
-  const [claimOpen, setClaimOpen] = useState(false);
-  const [randomOpen, setRandomOpen] = useState(false);
-  const [celebrationOpen, setCelebrationOpen] = useState(false);
-  const [itemOptions, setItemOptions] = useState<ItemOption[]>([]);
-  const [maxItems, setMaxItems] = useState(15);
-  const [customDraft, setCustomDraft] = useState("");
-  const [inviteOpen, setInviteOpen] = useState(false);
-  const [joinOpen, setJoinOpen] = useState(false);
-  const [copied, setCopied] = useState(false);
-  const [notice, setNotice] = useState("");
-  const [error, setError] = useState("");
-  const [loading, setLoading] = useState(true);
-  const [busy, setBusy] = useState(false);
-  const [aiBriefing, setAiBriefing] =
-    useState<AiOutingBriefing | null>(null);
-  const [aiSnapshot, setAiSnapshot] = useState("");
-  const [aiLoading, setAiLoading] = useState(false);
-  const [aiError, setAiError] = useState("");
-  const [crowd, setCrowd] = useState<CrowdSignal | null>(null);
-  const [crowdLoading, setCrowdLoading] = useState(false);
-  const [crowdError, setCrowdError] = useState("");
-  const [summerEvents, setSummerEvents] =
-    useState<SummerEventSearch | null>(null);
-  const [summerEventsLoading, setSummerEventsLoading] = useState(false);
-  const [summerEventsError, setSummerEventsError] = useState("");
-  const [highlightedItemId, setHighlightedItemId] = useState("");
-  const [detailTab, setDetailTab] =
-    useState<OutingDetailTab>("packing");
-  const previousReadyCount = useRef<number | null>(null);
-  const detailTabsRef = useRef<HTMLElement>(null);
-
-  const refresh = useCallback(
-    async (nextSession = session) => {
-      try {
-        const nextBundle = await getOuting(outingId, {
-          token: nextSession?.token,
-          inviteCode: nextSession ? undefined : (inviteCode ?? undefined),
-        });
-        setBundle(nextBundle);
-        setError("");
-      } catch (refreshError) {
-        setError(
-          refreshError instanceof Error
-            ? refreshError.message
-            : "모임을 불러오지 못했어요.",
-        );
-      } finally {
-        setLoading(false);
-      }
-    },
-    [inviteCode, outingId, session],
-  );
-
-  useEffect(() => {
-    void refresh();
-  }, [refresh]);
-
-  useEffect(() => {
-    listItemOptions()
-      .then((result) => {
-        setItemOptions(result.options);
-        setMaxItems(result.maxItems);
-      })
-      .catch(() => setNotice("준비물 선택지를 불러오지 못했어요."));
-  }, []);
-
-  useEffect(() => {
-    if (!session) return;
-    const refreshWhenVisible = () => {
-      if (document.visibilityState === "visible") void refresh();
-    };
-    const timer = window.setInterval(refreshWhenVisible, 10_000);
-    document.addEventListener("visibilitychange", refreshWhenVisible);
-    return () => {
-      window.clearInterval(timer);
-      document.removeEventListener("visibilitychange", refreshWhenVisible);
-    };
-  }, [refresh, session]);
-
-  const loadCrowd = useCallback(async () => {
-    if (!session) return;
-    setCrowdLoading(true);
-    setCrowdError("");
-    try {
-      const result = await getPlaceIntelligence(outingId, session.token);
-      setCrowd(result.crowd);
-      track("place_crowd_loaded", {
-        mode: result.crowd.mode,
-        level: result.crowd.level,
-      });
-    } catch (loadError) {
-      setCrowdError(
-        loadError instanceof Error
-          ? loadError.message
-          : "혼잡도를 불러오지 못했어요.",
-      );
-    } finally {
-      setCrowdLoading(false);
-    }
-  }, [outingId, session]);
-
-  useEffect(() => {
-    void loadCrowd();
-  }, [loadCrowd]);
-
-  useEffect(() => {
-    if (!notice) return;
-    const timer = window.setTimeout(() => setNotice(""), 2400);
-    return () => window.clearTimeout(timer);
-  }, [notice]);
-
-  useEffect(() => {
-    if (!highlightedItemId) return;
-    const timer = window.setTimeout(() => setHighlightedItemId(""), 1800);
-    return () => window.clearTimeout(timer);
-  }, [highlightedItemId]);
-
-  useEffect(() => {
-    if (!bundle) return;
-    const nextReadyCount = bundle.items.filter((item) => item.done).length;
-    if (
-      previousReadyCount.current != null &&
-      previousReadyCount.current < bundle.items.length &&
-      nextReadyCount === bundle.items.length
-    ) {
-      setCelebrationOpen(true);
-    }
-    previousReadyCount.current = nextReadyCount;
-  }, [bundle]);
-
-  const runMutation = async (
-    mutate: (activeSession: ParticipantSession) => Promise<unknown>,
-  ) => {
-    if (!session || busy) return false;
-    setBusy(true);
-    try {
-      await mutate(session);
-      await refresh(session);
-      return true;
-    } catch (mutationError) {
-      setNotice(
-        mutationError instanceof Error
-          ? mutationError.message
-          : "변경하지 못했어요.",
-      );
-      return false;
-    } finally {
-      setBusy(false);
-    }
-  };
-
-  const assign = async (participant: Participant) => {
-    if (!selectedItem) return;
-    const changed = await runMutation((activeSession) =>
-      updateItem(outingId, selectedItem.id, activeSession.token, {
-        ownerId: participant.id,
-      }),
-    );
-    if (!changed) return;
-    track("packing_item_assigned", {
-      item_id: selectedItem.key,
-    });
-    setSelectedItem(null);
-    setNotice(`${participant.name}님이 ${selectedItem.label}을 맡았어요`);
-  };
-
-  const toggle = async (item: PackingItem) => {
-    await runMutation((activeSession) =>
-      updateItem(outingId, item.id, activeSession.token, {
-        done: !item.done,
-      }),
-    );
-    track("packing_item_toggled", { item_id: item.key });
-  };
-
-  const finishMine = async () => {
-    if (!bundle?.viewer) return;
-    const changed = await runMutation((activeSession) =>
-      completeMyItems(outingId, activeSession.token),
-    );
-    if (!changed) return;
-    setNotice(`${bundle.viewer.name}님의 준비물을 모두 완료했어요`);
-    track("my_packing_completed");
-  };
-
-  const claimForMe = async (item: PackingItem, closeAfter = false) => {
-    if (!bundle?.viewer) return;
-    const changed = await runMutation((activeSession) =>
-      updateItem(outingId, item.id, activeSession.token, {
-        ownerId: bundle.viewer?.id,
-      }),
-    );
-    if (!changed) return;
-    if (closeAfter) setClaimOpen(false);
-    setNotice(`${item.label}, 내가 챙길게요!`);
-    track("packing_item_self_claimed", { item_id: item.key });
-  };
-
-  const toggleCatalogItem = async (option: ItemOption) => {
-    const existing = bundle?.items.find((item) => item.key === option.key);
-    const changed = await runMutation((activeSession) =>
-      existing
-        ? deleteItem(outingId, existing.id, activeSession.token)
-        : addItem(outingId, activeSession.token, { optionKey: option.key }),
-    );
-    if (changed) {
-      setNotice(
-        existing
-          ? `${option.label}을 목록에서 뺐어요`
-          : `${option.label}을 함께 챙겨요`,
-      );
-      track(existing ? "packing_item_deleted" : "packing_item_added", {
-        item_id: option.key,
-      });
-    }
-  };
-
-  const addCustomItem = async () => {
-    const label = customDraft.trim().replace(/\s+/g, " ").slice(0, 16);
-    if (!label) return;
-    const changed = await runMutation((activeSession) =>
-      addItem(outingId, activeSession.token, { label }),
-    );
-    if (changed) {
-      setCustomDraft("");
-      setNotice(`${label}을 함께 챙겨요`);
-      track("custom_packing_item_added");
-    }
-  };
-
-  const removeCustomItem = async (item: PackingItem) => {
-    const changed = await runMutation((activeSession) =>
-      deleteItem(outingId, item.id, activeSession.token),
-    );
-    if (changed) {
-      setNotice(`${item.label}을 목록에서 뺐어요`);
-      track("packing_item_deleted", { item_id: "custom" });
-    }
-  };
-
-  const applySmartRecommendations = async () => {
-    if (!bundle) return;
-    const existingKeys = new Set(bundle.items.map((item) => item.key));
-    const availableSlots = Math.max(0, maxItems - bundle.items.length);
-    const missing = (bundle.smartRecommendations ?? [])
-      .filter((recommendation) => !existingKeys.has(recommendation.key))
-      .slice(0, availableSlots);
-    if (missing.length === 0) {
-      setNotice("추천 준비물이 모두 목록에 있어요");
-      return;
-    }
-    const changed = await runMutation(async (activeSession) => {
-      for (const recommendation of missing) {
-        await addItem(outingId, activeSession.token, {
-          optionKey: recommendation.key,
-        });
-      }
-    });
-    if (!changed) return;
-    setNotice(`날씨 맞춤 준비물 ${missing.length}개를 더했어요`);
-    track("smart_packing_applied", { item_count: missing.length });
-  };
-
-  const handleRandomize = async () => {
-    const changed = await runMutation((activeSession) =>
-      randomizeItems(outingId, activeSession.token),
-    );
-    if (!changed) return;
-    setRandomOpen(false);
-    setNotice("남은 준비물을 공평하게 나눴어요");
-    track("packing_items_randomized");
-  };
-
-  const reactToEvent = async (
-    event: OutingEvent,
-    reactionType: "heart" | "cheer",
-  ) => {
-    const changed = await runMutation((activeSession) =>
-      toggleEventReaction(
-        outingId,
-        event.id,
-        activeSession.token,
-        reactionType,
-      ),
-    );
-    if (!changed) return;
-    track("activity_event_reacted", {
-      reaction_type: reactionType,
-    });
-  };
-
-  const dismissClaim = () => {
-    setClaimOpen(false);
-  };
-
-  const handleAiGenerate = async () => {
-    if (!bundle || !session || aiLoading) return;
-    setAiLoading(true);
-    setAiError("");
-    track("ai_briefing_requested", { outing_id: outingId });
-    try {
-      const snapshot = getBriefingSnapshot(bundle);
-      const result = await createAiBriefing(outingId, session.token);
-      setAiBriefing(result.briefing);
-      setAiSnapshot(snapshot);
-      track("ai_briefing_generated", {
-        outing_id: outingId,
-        cached: result.meta.cached ? 1 : 0,
-      });
-    } catch (generationError) {
-      setAiError(
-        generationError instanceof Error
-          ? generationError.message
-          : "AI 브리핑을 만들지 못했어요.",
-      );
-      track("ai_briefing_failed", { outing_id: outingId });
-    } finally {
-      setAiLoading(false);
-    }
-  };
-
-  const handleSummerEventSearch = async () => {
-    if (!session || summerEventsLoading) return;
-    setSummerEventsLoading(true);
-    setSummerEventsError("");
-    track("summer_events_requested", { outing_id: outingId });
-    try {
-      const result = await searchSummerEvents(outingId, session.token);
-      setSummerEvents(result.events);
-      track("summer_events_loaded", {
-        outing_id: outingId,
-        event_count: result.events.events.length,
-        cached: result.meta.cached ? 1 : 0,
-      });
-    } catch (searchError) {
-      setSummerEventsError(
-        searchError instanceof Error
-          ? searchError.message
-          : "행사 정보를 확인하지 못했어요.",
-      );
-      track("summer_events_failed", { outing_id: outingId });
-    } finally {
-      setSummerEventsLoading(false);
-    }
-  };
-
-  const focusAiItem = (itemKey: string) => {
-    if (!bundle) return;
-    const item = bundle.items.find(
-      (candidate) => candidate.key === itemKey,
-    );
-    if (!item) return;
-    setHighlightedItemId(item.id);
-    setDetailTab("packing");
-    window.requestAnimationFrame(() => {
-      window.requestAnimationFrame(() => {
-        document
-          .getElementById(`packing-item-${item.id}`)
-          ?.scrollIntoView({ behavior: "smooth", block: "center" });
-      });
-    });
-    track("ai_briefing_action_opened", { item_id: item.key });
-  };
-
-  const switchDetailTab = (tab: OutingDetailTab) => {
-    if (tab === detailTab) return;
-    setDetailTab(tab);
-    track("outing_detail_tab_selected", { tab });
-    window.requestAnimationFrame(() => {
-      detailTabsRef.current?.scrollIntoView({
-        behavior: "smooth",
-        block: "start",
-      });
-    });
-  };
-
-  const handleAiShare = async () => {
-    if (!bundle || !aiBriefing) return;
-    const viewerName = bundle.participants.find(
-      (participant) => participant.id === session?.participantId,
-    )?.name;
-    const deepLink = `intoss://${APP_NAME}/outing/${bundle.outing.id}?invite=${encodeURIComponent(bundle.outing.inviteCode)}`;
-    const webLink = `${window.location.origin}/outing/${bundle.outing.id}?invite=${encodeURIComponent(bundle.outing.inviteCode)}`;
-    const message = [
-      `☀️ ${viewerName ? `${viewerName}님이 보낸 ` : ""}${bundle.outing.title} AI 준비 브리핑`,
-      `“${aiBriefing.headline}”`,
-      aiBriefing.shareCaption,
-      "같이 확인하고 하나씩 맡아줘 👇",
-      "",
-    ].join("\n");
-    let resultMessage = "AI 브리핑을 복사했어요";
-    try {
-      if (hasTossBridge()) {
-        const tossLink = await getTossShareLink(
-          deepLink,
-          SHARE_OG_IMAGE_URL,
-        );
-        await share({ message: `${message}${tossLink}` });
-        resultMessage = "AI 브리핑을 공유했어요";
-      } else if (window.navigator.share) {
-        await window.navigator.share({
-          title: `${bundle.outing.title} AI 브리핑`,
-          text: message,
-          url: webLink,
-        });
-        resultMessage = "AI 브리핑을 공유했어요";
-      } else {
-        await window.navigator.clipboard.writeText(`${message}${webLink}`);
-      }
-    } catch {
-      await window.navigator.clipboard?.writeText(`${message}${webLink}`);
-    } finally {
-      setNotice(resultMessage);
-      track("ai_briefing_shared", { outing_id: outingId });
-    }
-  };
-
-  const handleShare = async () => {
-    if (!bundle) return;
-    const viewerName = bundle.participants.find(
-      (participant) => participant.id === session?.participantId,
-    )?.name;
-    const deepLink = `intoss://${APP_NAME}/outing/${bundle.outing.id}?invite=${encodeURIComponent(bundle.outing.inviteCode)}`;
-    const webLink = `${window.location.origin}/outing/${bundle.outing.id}?invite=${encodeURIComponent(bundle.outing.inviteCode)}`;
-    const readyCount = bundle.items.filter((item) => item.done).length;
-    const unassigned = bundle.items.filter((item) => item.owner == null);
-    const day = daysUntil(bundle.outing.startsAt);
-    const dayLabel = day === 0 ? "오늘" : day > 0 ? `D-${day}` : "";
-    const ask =
-      unassigned.length > 0
-        ? `${unassigned
-            .slice(0, 3)
-            .map((item) => item.label)
-            .join(" · ")} 중 하나 맡아줄래?`
-        : "준비 상황 같이 확인해줘!";
-    const message = [
-      `🏖️ ${viewerName ? `${viewerName}님이 초대했어요` : bundle.outing.title}`,
-      ...(viewerName ? [`${bundle.outing.title}, 같이 챙길래?`] : []),
-      `${dayLabel ? `${dayLabel} · ` : ""}준비 ${readyCount}/${bundle.items.length}`,
-      ask,
-      "하나 맡고 준비 완료까지 같이 가요 👇",
-      "",
-    ].join("\n");
-    let resultMessage = "초대 링크를 복사했어요";
-    try {
-      if (hasTossBridge()) {
-        const tossLink = await getTossShareLink(
-          deepLink,
-          SHARE_OG_IMAGE_URL,
-        );
-        await share({ message: `${message}${tossLink}` });
-        resultMessage = "초대 링크를 공유했어요";
-      } else {
-        await window.navigator.clipboard.writeText(`${message}${webLink}`);
-      }
-    } catch {
-      await window.navigator.clipboard?.writeText(`${message}${webLink}`);
-    } finally {
-      track("outing_invite_shared", { outing_id: outingId });
-      setCopied(true);
-      setNotice(resultMessage);
-    }
-  };
-
-  if (loading) return <LoadingScreen />;
-
-  if (!bundle || error) {
-    return (
-      <StateScreen
-        title={error || "모임을 찾지 못했어요."}
-        description="초대 링크를 다시 확인하거나 내 모임으로 돌아가 주세요."
-        actionLabel="내 모임으로"
-        onAction={onHome}
-      />
-    );
-  }
-
-  const readyCount = bundle.items.filter((item) => item.done).length;
-  const readyPercent =
-    bundle.items.length > 0
-      ? `${Math.round((readyCount / bundle.items.length) * 100)}%`
-      : "0%";
-  const myItems = bundle.viewer
-    ? bundle.items.filter((item) => item.owner?.id === bundle.viewer?.id)
-    : [];
-  const myReady = myItems.length > 0 && myItems.every((item) => item.done);
-  const unassignedItems = bundle.items.filter((item) => item.owner == null);
-  const needsOwnItem =
-    Boolean(bundle.viewer) &&
-    bundle.participants.length >= 2 &&
-    !bundle.items.some((item) => item.owner?.id === bundle.viewer?.id) &&
-    unassignedItems.length > 0;
-  const existingItemKeys = new Set(bundle.items.map((item) => item.key));
-  const smartRecommendations = bundle.smartRecommendations ?? [];
-  const events = bundle.events ?? [];
-  const missingSmartRecommendations = smartRecommendations.filter(
-    (recommendation) => !existingItemKeys.has(recommendation.key),
-  );
-  const eventDay = daysUntil(bundle.outing.startsAt);
-  const unfinishedCount = bundle.items.length - readyCount;
-  const aiBriefingStale =
-    Boolean(aiBriefing) &&
-    aiSnapshot !== "" &&
-    aiSnapshot !== getBriefingSnapshot(bundle);
-
-  return (
-    <main className="app" aria-label={`${bundle.outing.title} 준비 화면`}>
-      <section className="hero" aria-labelledby="outing-title">
-        <img
-          className="hero-image"
-          src="/assets/hero-picnic.png"
-          alt=""
-          draggable={false}
-        />
-        <div className="hero-content">
-          <p className="outing-date">
-            {formatDateLabel(bundle.outing.startsAt)}
-          </p>
-          <h1 id="outing-title">
-            {bundle.outing.title},
-            <br />
-            {bundle.participants.length}명이 준비 중
-          </h1>
-          <div className="weather-pill" aria-label="모임 날씨">
-            <SunIcon aria-hidden="true" />
-            {bundle.weather ? (
-              <>
-                <span>
-                  {bundle.weather.maxTemperature}° · {bundle.weather.condition}{" "}
-                  {bundle.weather.precipitationProbability}%
-                </span>
-                <strong>{bundle.weather.uvLabel}</strong>
-              </>
-            ) : (
-              <span>{bundle.outing.placeName} · 예보 준비 중</span>
-            )}
-          </div>
-        </div>
-      </section>
-
-      {!bundle.viewer && inviteCode ? (
-        <section className="invite-entry-card" aria-labelledby="invite-entry-title">
-          <div>
-            <span>초대받은 모임이에요</span>
-            <h2 id="invite-entry-title">친구들과 준비물을 나눠 맡아보세요</h2>
-            <p>참여하기를 누른 뒤 이름과 내가 챙길 준비물을 골라요.</p>
-          </div>
-          <button type="button" onClick={() => setJoinOpen(true)}>
-            모임 참여하기
-          </button>
-        </section>
-      ) : null}
-
-      <section className="readiness" aria-labelledby="readiness-title">
-        <h2 id="readiness-title">
-          <strong>{readyCount}</strong>
-          <span>/ {bundle.items.length}개 준비</span>
-        </h2>
-        <div
-          className="progress-track"
-          role="progressbar"
-          aria-label="준비 진행률"
-          aria-valuemin={0}
-          aria-valuemax={bundle.items.length}
-          aria-valuenow={readyCount}
-        >
-          <span style={{ width: readyPercent }} />
-        </div>
-      </section>
-
-      <nav
-        ref={detailTabsRef}
-        className="outing-detail-tabs"
-        aria-label="모임 상세 메뉴"
-      >
-        <button
-          className={detailTab === "packing" ? "is-active" : ""}
-          type="button"
-          aria-pressed={detailTab === "packing"}
-          onClick={() => switchDetailTab("packing")}
-        >
-          <BackpackIcon aria-hidden="true" />
-          <span>준비물</span>
-          {unfinishedCount > 0 ? <small>{unfinishedCount}</small> : null}
-        </button>
-        <button
-          className={detailTab === "briefing" ? "is-active" : ""}
-          type="button"
-          aria-pressed={detailTab === "briefing"}
-          onClick={() => switchDetailTab("briefing")}
-        >
-          <MagicWandIcon aria-hidden="true" />
-          <span>장소·AI</span>
-        </button>
-        <button
-          className={detailTab === "activity" ? "is-active" : ""}
-          type="button"
-          aria-pressed={detailTab === "activity"}
-          onClick={() => switchDetailTab("activity")}
-        >
-          <PersonIcon aria-hidden="true" />
-          <span>친구 소식</span>
-          {events.length > 0 ? <small>{Math.min(events.length, 9)}</small> : null}
-        </button>
-      </nav>
-
-      <div
-        className="outing-detail-panel"
-        hidden={detailTab !== "packing"}
-      >
-
-      {bundle.viewer && unassignedItems.length > 0 ? (
-        <button
-          className="invite-nudge"
-          type="button"
-          onClick={() => {
-            setCopied(false);
-            setInviteOpen(true);
-          }}
-        >
-          <span className="invite-nudge__avatars">
-            {bundle.participants.slice(0, 3).map((participant) => (
-              <img
-                key={participant.id}
-                src={avatarSrc(participant.avatarKey)}
-                alt=""
-                draggable={false}
-              />
-            ))}
-            <i>
-              <PlusIcon aria-hidden="true" />
-            </i>
-          </span>
-          <span>
-            <strong>
-              {unassignedItems.length}개 준비물의 주인을 찾고 있어요
-            </strong>
-            <small>친구에게 하나 맡아달라고 해볼까요?</small>
-          </span>
-          <ChevronRightIcon aria-hidden="true" />
-        </button>
-      ) : null}
-
-      {needsOwnItem ? (
-        <button
-          className="claim-nudge"
-          type="button"
-          onClick={() => setClaimOpen(true)}
-        >
-          <span>
-            <strong>내가 챙길 준비물을 골라볼까요?</strong>
-            <small>아직 주인이 없는 준비물 {unassignedItems.length}개</small>
-          </span>
-          <ChevronRightIcon aria-hidden="true" />
-        </button>
-      ) : null}
-
-      {eventDay >= 0 && eventDay <= 1 && unfinishedCount > 0 ? (
-        <section className="last-check-card" aria-label="출발 전 마지막 점검">
-          <CalendarIcon aria-hidden="true" />
-          <span>
-            <strong>
-              {eventDay === 0 ? "오늘 출발해요" : "내일 출발해요"}
-            </strong>
-            <small>아직 {unfinishedCount}개가 준비 중이에요</small>
-          </span>
-          <b>마지막 점검</b>
-        </section>
-      ) : null}
-
-      </div>
-
-      <div
-        className="outing-detail-panel"
-        hidden={detailTab !== "briefing"}
-      >
-
-      {bundle.viewer ? (
-        <AiBriefingCard
-          briefing={aiBriefing}
-          loading={aiLoading}
-          error={aiError}
-          stale={aiBriefingStale}
-          onGenerate={() => void handleAiGenerate()}
-          onShare={() => void handleAiShare()}
-          onFocusItem={focusAiItem}
-        />
-      ) : null}
-
-      {bundle.viewer ? (
-        <PlaceIntelligenceCard
-          placeName={bundle.outing.placeName}
-          crowd={crowd}
-          crowdLoading={crowdLoading}
-          crowdError={crowdError}
-          events={summerEvents}
-          eventLoading={summerEventsLoading}
-          eventError={summerEventsError}
-          onRefreshCrowd={() => void loadCrowd()}
-          onSearchEvents={() => void handleSummerEventSearch()}
-        />
-      ) : null}
-
-      {!bundle.viewer ? (
-        <section className="outing-tab-empty">
-          <MagicWandIcon aria-hidden="true" />
-          <strong>참여하면 장소 브리핑을 볼 수 있어요</strong>
-          <span>혼잡도와 여름 행사, AI 준비 팁을 한곳에 모아드려요.</span>
-        </section>
-      ) : null}
-
-      </div>
-
-      <div
-        className="outing-detail-panel outing-detail-panel--packing-list"
-        hidden={detailTab !== "packing"}
-      >
-
-      <section className="smart-packing-card" aria-labelledby="smart-title">
-        <div className="smart-packing-card__heading">
-          <span>
-            <MagicWandIcon aria-hidden="true" />
-          </span>
-          <div>
-            <p>SMART PACKING</p>
-            <h2 id="smart-title">이 날씨엔 이렇게 챙겨요</h2>
-          </div>
-        </div>
-        <div className="smart-recommendation-list">
-          {smartRecommendations.slice(0, 3).map((recommendation) => (
-            <div key={recommendation.key}>
-              <ItemVisual visual={recommendation.visual} compact />
-              <span>
-                <strong>{recommendation.label}</strong>
-                <small>{recommendation.reason}</small>
-                <b>{recommendation.quantityLabel}</b>
-              </span>
-            </div>
-          ))}
-        </div>
-        <div className="smart-packing-actions">
-          {missingSmartRecommendations.length > 0 ? (
-            <button
-              type="button"
-              disabled={busy}
-              onClick={() => void applySmartRecommendations()}
-            >
-              추천 {missingSmartRecommendations.length}개 반영
-            </button>
-          ) : (
-            <span>
-              <CheckIcon aria-hidden="true" />
-              맞춤 준비물 반영 완료
-            </span>
-          )}
-          {bundle.participants.length > 1 &&
-          unassignedItems.length > 0 ? (
-            <button
-              className="randomize-open"
-              type="button"
-              onClick={() => setRandomOpen(true)}
-            >
-              <ShuffleIcon aria-hidden="true" />
-              랜덤으로 나누기
-            </button>
-          ) : null}
-        </div>
-      </section>
-
-      </div>
-
-      <div
-        className="outing-detail-panel"
-        hidden={detailTab !== "activity"}
-      >
-
-      <section className="outing-participants-card" aria-labelledby="participants-title">
-        <div className="outing-participants-card__heading">
-          <span>
-            <strong id="participants-title">함께 준비하는 친구</strong>
-            <small>{bundle.participants.length}명 참여 중</small>
-          </span>
-          {bundle.viewer ? (
-            <button
-              type="button"
-              onClick={() => {
-                setCopied(false);
-                setInviteOpen(true);
-              }}
-            >
-              <PlusIcon aria-hidden="true" />
-              초대
-            </button>
-          ) : null}
-        </div>
-        <ul>
-          {bundle.participants.slice(0, 6).map((participant) => {
-            const participantItems = bundle.items.filter(
-              (item) => item.owner?.id === participant.id,
-            );
-            const participantReady = participantItems.filter(
-              (item) => item.done,
-            ).length;
-            return (
-              <li key={participant.id}>
-                <img
-                  src={avatarSrc(participant.avatarKey)}
-                  alt=""
-                  draggable={false}
-                />
-                <span>
-                  <strong>
-                    {participant.id === bundle.viewer?.id
-                      ? `${participant.name} · 나`
-                      : participant.name}
-                  </strong>
-                  <small>
-                    {participantItems.length > 0
-                      ? `${participantReady}/${participantItems.length}개 준비`
-                      : "아직 맡은 준비물이 없어요"}
-                  </small>
-                </span>
-                <b
-                  className={
-                    participantItems.length > 0 &&
-                    participantReady === participantItems.length
-                      ? "is-ready"
-                      : ""
-                  }
-                >
-                  {participantItems.length === 0
-                    ? "대기"
-                    : participantReady === participantItems.length
-                      ? "완료"
-                      : `${participantItems.length - participantReady}개 남음`}
-                </b>
-              </li>
-            );
-          })}
-        </ul>
-        {bundle.participants.length > 6 ? (
-          <p className="outing-participants-card__more">
-            외 {bundle.participants.length - 6}명도 함께 준비하고 있어요
-          </p>
-        ) : null}
-      </section>
-
-      {events.length > 0 ? (
-        <section className="activity-feed" aria-labelledby="activity-title">
-          <div>
-            <h2 id="activity-title">친구들 소식</h2>
-            <span>실시간</span>
-          </div>
-          <ul>
-            {events.slice(0, 3).map((event) => (
-              <li key={event.id}>
-                {event.participant ? (
-                  <img
-                    src={avatarSrc(event.participant.avatarKey)}
-                    alt=""
-                    draggable={false}
-                  />
-                ) : (
-                  <span>
-                    <StarFilledIcon aria-hidden="true" />
-                  </span>
-                )}
-                <div className="activity-feed__content">
-                  <p>{eventMessage(event)}</p>
-                  {bundle.viewer ? (
-                    <div className="activity-reactions">
-                      <button
-                        type="button"
-                        aria-label="좋아요"
-                        aria-pressed={event.viewerReaction === "heart"}
-                        disabled={busy}
-                        onClick={() => void reactToEvent(event, "heart")}
-                      >
-                        <HeartIcon aria-hidden="true" />
-                        {event.reactions?.heart ?? 0}
-                      </button>
-                      <button
-                        type="button"
-                        aria-label="응원해요"
-                        aria-pressed={event.viewerReaction === "cheer"}
-                        disabled={busy}
-                        onClick={() => void reactToEvent(event, "cheer")}
-                      >
-                        <StarFilledIcon aria-hidden="true" />
-                        {event.reactions?.cheer ?? 0}
-                      </button>
-                    </div>
-                  ) : null}
-                </div>
-              </li>
-            ))}
-          </ul>
-        </section>
-      ) : (
-        <section className="outing-tab-empty">
-          <HeartIcon aria-hidden="true" />
-          <strong>아직 새로운 소식이 없어요</strong>
-          <span>친구가 참여하거나 준비물을 맡으면 여기에 바로 보여요.</span>
-        </section>
-      )}
-
-      </div>
-
-      <div
-        className="outing-detail-panel outing-detail-panel--packing-list"
-        hidden={detailTab !== "packing"}
-      >
-
-      <section className="packing-section" aria-labelledby="packing-title">
-        <div className="packing-title-row">
-          <h2 id="packing-title">함께 챙길 것</h2>
-          <div className="packing-title-actions">
-            <span>{bundle.outing.placeName}</span>
-            {bundle.viewer ? (
-              <button
-                type="button"
-                onClick={() => {
-                  setCustomDraft("");
-                  setManageOpen(true);
-                }}
-              >
-                준비물 편집
-              </button>
-            ) : null}
-          </div>
-        </div>
-        <div className="packing-list">
-          {bundle.items.map((item) => (
-            <article
-              id={`packing-item-${item.id}`}
-              className={`packing-row${item.done ? " is-done" : ""}${
-                highlightedItemId === item.id ? " is-ai-target" : ""
-              }`}
-              key={item.id}
-            >
-              <button
-                className="check-button"
-                type="button"
-                aria-label={`${item.label} ${
-                  item.done ? "준비 취소" : "준비 완료"
-                }`}
-                aria-pressed={item.done}
-                disabled={!session || busy}
-                onClick={() => void toggle(item)}
-              >
-                {item.done ? <CheckIcon aria-hidden="true" /> : null}
-              </button>
-              <ItemVisual visual={item.visual} />
-              <div className="packing-row__name">
-                <h3>{item.label}</h3>
-                <small>{item.quantityLabel}</small>
-              </div>
-              <button
-                className={`owner${item.owner ? "" : " owner-empty"}`}
-                type="button"
-                disabled={!session || busy}
-                aria-label={`${item.label} 담당자 ${
-                  item.owner?.name ?? "내가 맡기"
-                }`}
-                onClick={() =>
-                  item.owner
-                    ? setSelectedItem(item)
-                    : void claimForMe(item)
-                }
-              >
-                {item.owner ? (
-                  <>
-                    <img
-                      src={avatarSrc(item.owner.avatarKey)}
-                      alt=""
-                      draggable={false}
-                    />
-                    <span>
-                      {item.owner.id === bundle.viewer?.id
-                        ? "나"
-                        : item.owner.name}
-                    </span>
-                  </>
-                ) : (
-                  <>
-                    <PlusIcon aria-hidden="true" />
-                    <span>내가 맡기</span>
-                  </>
-                )}
-              </button>
-            </article>
-          ))}
-        </div>
-      </section>
-
-      </div>
-
-      {bundle.viewer ? (
-        <div className="action-dock" aria-label="준비 작업">
-          <button
-            className={`primary-action${myReady ? " is-complete" : ""}`}
-            type="button"
-            disabled={
-              busy || (myItems.length === 0 && unassignedItems.length === 0)
-            }
-            onClick={() =>
-              myItems.length === 0
-                ? setClaimOpen(true)
-                : void finishMine()
-            }
-          >
-            {myItems.length === 0
-              ? "준비물 하나 맡기"
-              : myReady
-                ? "준비 완료했어요"
-                : "내 준비 끝내기"}
-          </button>
-          <button
-            className="secondary-action"
-            type="button"
-            onClick={() => {
-              setCopied(false);
-              setInviteOpen(true);
-            }}
-          >
-            <PersonIcon aria-hidden="true" />
-            진행률 공유하기
-          </button>
-        </div>
-      ) : null}
-
-      {notice ? (
-        <div className="toast" role="status" aria-live="polite">
-          <CheckIcon aria-hidden="true" />
-          {notice}
-        </div>
-      ) : null}
-
-      <Sheet
-        open={claimOpen && unassignedItems.length > 0}
-        onClose={dismissClaim}
-        title="하나만 맡아볼까요?"
-        description={`아직 주인이 없는 준비물이 ${unassignedItems.length}개예요. 내가 챙길 것을 하나 골라주세요.`}
-      >
-        <div className="claim-items">
-          {unassignedItems.map((item) => (
-            <button
-              type="button"
-              key={item.id}
-              disabled={busy}
-              onClick={() => void claimForMe(item, true)}
-            >
-              <ItemVisual visual={item.visual} />
-              <span>
-                <strong>{item.label}</strong>
-                <small>{item.quantityLabel} · 내가 챙길게</small>
-              </span>
-              <ChevronRightIcon aria-hidden="true" />
-            </button>
-          ))}
-        </div>
-        <button
-          className="sheet-text-button"
-          type="button"
-          onClick={dismissClaim}
-        >
-          나중에 고를게요
-        </button>
-      </Sheet>
-
-      <Sheet
-        open={selectedItem != null}
-        onClose={() => setSelectedItem(null)}
-        title={`${selectedItem?.label ?? "준비물"}은 누가 챙길까요?`}
-        description="담당자를 고르면 참여한 친구들에게도 바로 반영돼요."
-      >
-        <div className="people-grid">
-          {bundle.participants.map((participant) => (
-            <button
-              key={participant.id}
-              type="button"
-              onClick={() => void assign(participant)}
-            >
-              <img
-                src={avatarSrc(participant.avatarKey)}
-                alt=""
-                draggable={false}
-              />
-              <span>
-                {participant.id === bundle.viewer?.id
-                  ? "나"
-                  : participant.name}
-              </span>
-            </button>
-          ))}
-        </div>
-      </Sheet>
-
-      <Sheet
-        open={randomOpen}
-        onClose={() => setRandomOpen(false)}
-        title="누가 뭘 챙길지 뽑아볼까요?"
-        description="아직 주인이 없는 준비물을 현재 참여자에게 최대한 공평하게 나눠요."
-      >
-        <div className="randomize-preview">
-          <span>
-            <ShuffleIcon aria-hidden="true" />
-          </span>
-          <div>
-            <strong>{unassignedItems.length}개 준비물 랜덤 배정</strong>
-            <small>{bundle.participants.length}명이 나눠 맡아요</small>
-          </div>
-        </div>
-        <div className="randomize-avatars">
-          {bundle.participants.map((participant) => (
-            <span key={participant.id}>
-              <img
-                src={avatarSrc(participant.avatarKey)}
-                alt=""
-                draggable={false}
-              />
-              {participant.id === bundle.viewer?.id
-                ? "나"
-                : participant.name}
-            </span>
-          ))}
-        </div>
-        <button
-          className="sheet-primary"
-          type="button"
-          disabled={busy}
-          onClick={() => void handleRandomize()}
-        >
-          <ShuffleIcon aria-hidden="true" />
-          {busy ? "나누고 있어요…" : "랜덤 담당 뽑기"}
-        </button>
-      </Sheet>
-
-      <Sheet
-        open={manageOpen}
-        onClose={() => setManageOpen(false)}
-        title="준비물 편집"
-        description={`선택하면 모두의 목록에 바로 반영돼요. 최대 ${maxItems}개까지 추가할 수 있어요.`}
-      >
-        <div className="manage-items">
-          <div className="manage-items__count">
-            <strong>추천 준비물</strong>
-            <span>
-              {bundle.items.length}/{maxItems}
-            </span>
-          </div>
-          <ItemPicker
-            options={itemOptions}
-            selectedKeys={
-              new Set(
-                bundle.items
-                  .filter((item) =>
-                    itemOptions.some((option) => option.key === item.key),
-                  )
-                  .map((item) => item.key),
-              )
-            }
-            disabled={busy}
-            onToggle={(option) => void toggleCatalogItem(option)}
-          />
-          <div className="custom-item-input">
-            <input
-              maxLength={16}
-              value={customDraft}
-              aria-label="직접 준비물 입력"
-              placeholder="예: 보드게임, 구급약"
-              onChange={(event) => setCustomDraft(event.target.value)}
-              onKeyDown={(event) => {
-                if (event.key === "Enter") {
-                  event.preventDefault();
-                  void addCustomItem();
-                }
-              }}
-            />
-            <button
-              type="button"
-              disabled={
-                busy ||
-                !customDraft.trim() ||
-                bundle.items.length >= maxItems
-              }
-              onClick={() => void addCustomItem()}
-            >
-              추가
-            </button>
-          </div>
-          {bundle.items.some((item) => item.key.startsWith("custom_")) ? (
-            <div className="custom-current-list">
-              <strong>직접 추가한 준비물</strong>
-              {bundle.items
-                .filter((item) => item.key.startsWith("custom_"))
-                .map((item) => (
-                  <div key={item.id}>
-                    <span>
-                      <ItemVisual visual={item.visual} compact />
-                      {item.label}
-                    </span>
-                    <button
-                      type="button"
-                      disabled={busy}
-                      aria-label={`${item.label} 삭제`}
-                      onClick={() => void removeCustomItem(item)}
-                    >
-                      삭제
-                    </button>
-                  </div>
-                ))}
-            </div>
-          ) : null}
-        </div>
-      </Sheet>
-
-      <Sheet
-        open={inviteOpen}
-        onClose={() => setInviteOpen(false)}
-        title="같이 갈 친구를 불러요"
-        description="링크를 연 친구가 이 모임에 참여하고 같은 준비 상태를 볼 수 있어요."
-      >
-        <ProgressShareCard bundle={bundle} />
-        <p className="share-card-hint">
-          진행 상황과 아직 주인이 없는 준비물을 함께 보내요.
-        </p>
-        <button
-          className="sheet-primary"
-          type="button"
-          onClick={() => void handleShare()}
-        >
-          {copied ? (
-            <>
-              <CheckIcon aria-hidden="true" />
-              공유했어요
-            </>
-          ) : (
-            <>
-              <CopyIcon aria-hidden="true" />
-              초대 링크 공유하기
-            </>
-          )}
-        </button>
-      </Sheet>
-
-      <Sheet
-        open={celebrationOpen}
-        onClose={() => setCelebrationOpen(false)}
-        title="모두 챙겼어요!"
-        description="준비물 하나도 빠짐없이 완료했어요. 친구들과 이 순간을 나눠보세요."
-      >
-        <div className="celebration-mark" aria-hidden="true">
-          <StarFilledIcon />
-          <CheckIcon />
-        </div>
-        <ProgressShareCard bundle={bundle} />
-        <button
-          className="sheet-primary"
-          type="button"
-          onClick={() => void handleShare()}
-        >
-          <CopyIcon aria-hidden="true" />
-          준비 완료 자랑하기
-        </button>
-      </Sheet>
-
-      <JoinSheet
-        open={joinOpen && !bundle.viewer}
-        outing={bundle}
-        inviteCode={inviteCode ?? ""}
-        onCancel={onHome}
-        onJoined={(joinedSession, joinedBundle) => {
-          saveSession(joinedSession, joinedBundle.outing);
-          setSession(joinedSession);
-          setBundle(joinedBundle);
-          setJoinOpen(false);
-          window.history.replaceState({}, "", `/outing/${outingId}`);
-          setNotice(`${joinedBundle.viewer?.name ?? "친구"}님, 함께 준비해요`);
-        }}
-      />
-    </main>
-  );
-}
-
-function JoinSheet({
-  open,
-  outing,
-  inviteCode,
-  onCancel,
-  onJoined,
-}: {
-  open: boolean;
-  outing: OutingBundle;
-  inviteCode: string;
-  onCancel: () => void;
-  onJoined: (session: ParticipantSession, bundle: OutingBundle) => void;
-}) {
-  const [name, setName] = useState("");
-  const [submitting, setSubmitting] = useState(false);
-  const [error, setError] = useState("");
-  const availableItems = outing.items
-    .filter((item) => item.owner == null)
-    .slice(0, 3);
-
-  const submit = async (event: FormEvent) => {
-    event.preventDefault();
-    setSubmitting(true);
-    setError("");
-    try {
-      const joined = await joinOuting(outing.outing.id, {
-        inviteCode,
-        name,
-      });
-      track("outing_joined", { outing_id: outing.outing.id });
-      onJoined(joined.session, joined.outing);
-    } catch (joinError) {
-      setError(
-        joinError instanceof Error
-          ? joinError.message
-          : "모임에 참여하지 못했어요.",
-      );
-    } finally {
-      setSubmitting(false);
-    }
-  };
-
-  return (
-    <Sheet
-      open={open}
-      onClose={onCancel}
-      title={`${outing.outing.title}에 같이 갈까요?`}
-      description={`${outing.participants.length}명이 ${outing.outing.placeName} 갈 준비를 하고 있어요.`}
-    >
-      <form className="create-form" onSubmit={submit}>
-        {availableItems.length > 0 ? (
-          <div className="join-claim-preview">
-            <strong>참여하면 하나를 골라 맡을 수 있어요</strong>
-            <div>
-              {availableItems.map((item) => (
-                <span key={item.id}>
-                  <ItemVisual visual={item.visual} compact />
-                  {item.label}
-                </span>
-              ))}
-            </div>
-          </div>
-        ) : null}
-        <label>
-          <span>친구들에게 보일 이름</span>
-          <input
-            autoFocus
-            required
-            maxLength={10}
-            value={name}
-            onChange={(event) => setName(event.target.value)}
-            placeholder="닉네임"
-          />
-        </label>
-        {error ? <p className="form-error">{error}</p> : null}
-        <button
-          className="sheet-primary"
-          type="submit"
-          disabled={submitting}
-        >
-          <PersonIcon aria-hidden="true" />
-          {submitting ? "참여하고 있어요…" : "모임에 참여하기"}
-        </button>
-      </form>
-    </Sheet>
-  );
-}
-
-function LoadingScreen() {
-  return (
-    <main className="app state-app" aria-label="모임 불러오는 중">
-      <div className="skeleton skeleton-hero" />
-      <div className="state-content">
-        <div className="skeleton skeleton-line" />
-        <div className="skeleton skeleton-card" />
-        <span className="loading-label">모임을 불러오고 있어요</span>
-      </div>
-    </main>
-  );
-}
-
-function StateScreen({
-  title,
-  description,
-  actionLabel,
-  onAction,
-}: {
-  title: string;
-  description: string;
-  actionLabel: string;
-  onAction: () => void;
-}) {
-  return (
-    <main className="app state-app">
-      <div className="state-content">
-        <span className="state-icon">
-          <ReloadIcon aria-hidden="true" />
-        </span>
-        <h1>{title}</h1>
-        <p>{description}</p>
-        <button className="home-primary" type="button" onClick={onAction}>
-          {actionLabel}
-        </button>
-      </div>
     </main>
   );
 }

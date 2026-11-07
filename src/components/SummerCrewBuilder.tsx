@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useState } from "react";
 import {
+  CalendarIcon,
   CheckIcon,
   CopyIcon,
   Cross2Icon,
@@ -9,6 +10,7 @@ import {
   StarFilledIcon,
 } from "@radix-ui/react-icons";
 
+import { APP_NAME, shareContent } from "../platform";
 import { Sheet } from "./Sheet";
 import {
   isSummerTypeKey,
@@ -212,18 +214,76 @@ function saveFriends(friends: FriendType[]) {
   }
 }
 
-function parseFriendTypeLink(value: string) {
-  try {
-    const url = new URL(value.trim(), window.location.origin);
-    const type = url.searchParams.get("summerType");
-    if (!isSummerTypeKey(type)) return null;
-    return {
-      type,
-      name: normalizeUserDisplayName(url.searchParams.get("summerName")),
-    };
-  } catch {
-    return null;
+export type OutingSuggestion = {
+  title: string;
+  placeId?: string;
+  activityType: string;
+};
+
+/** 조합의 추천 모임 문구를 실제 모임 만들기 기본값으로 바꿔요. */
+export function suggestOutingForCrew(recommendedPlace: string): OutingSuggestion {
+  const text = recommendedPlace;
+  const pick = (placeId: string | undefined, activityType: string) => ({
+    title: text.slice(0, 32),
+    placeId,
+    activityType,
+  });
+  if (text.includes("워터파크")) return pick("caribbean-bay", "water-play");
+  if (text.includes("계곡") || text.includes("래프팅")) {
+    return pick("baegun-valley", "water-play");
   }
+  if (text.includes("부산") || text.includes("해변") || text.includes("요트")) {
+    return pick("songjeong-beach", "water-play");
+  }
+  if (text.includes("한강")) return pick("yeouido-hangang", "picnic");
+  if (text.includes("서울숲") || text.includes("숲") || text.includes("호수")) {
+    return pick("seoul-forest", "picnic");
+  }
+  if (text.includes("수영장") || text.includes("수상")) {
+    return pick(undefined, "water-play");
+  }
+  if (text.includes("페스티벌") || text.includes("야시장")) {
+    return pick(undefined, "festival");
+  }
+  if (text.includes("드라이브") || text.includes("제주") || text.includes("짚라인")) {
+    return pick(undefined, "trip");
+  }
+  return pick(undefined, "picnic");
+}
+
+const SHORT_SHARE_LINK = /(^|\.)toss\.im$/;
+
+/** 붙여넣은 문자열 전체(공유 메시지 포함)에서 결과 링크를 찾아요. */
+function parseFriendTypeLink(value: string): {
+  type: SummerTypeKey | null;
+  name: string;
+  shortLink: boolean;
+} | null {
+  const candidates = value.match(/(?:https?|intoss):\/\/[^\s]+/g) ?? [
+    value.trim(),
+  ];
+  let shortLink = false;
+  for (const candidate of candidates) {
+    try {
+      const url = new URL(candidate, window.location.origin);
+      const type = url.searchParams.get("summerType");
+      if (isSummerTypeKey(type)) {
+        return {
+          type,
+          name: normalizeUserDisplayName(url.searchParams.get("summerName")),
+          shortLink: false,
+        };
+      }
+      if (SHORT_SHARE_LINK.test(url.hostname)) shortLink = true;
+    } catch {
+      // 다음 후보를 확인해요.
+    }
+  }
+  const inlineType = value.match(/summerType=([a-z]+)/)?.[1] ?? null;
+  if (isSummerTypeKey(inlineType)) {
+    return { type: inlineType, name: "", shortLink: false };
+  }
+  return shortLink ? { type: null, name: "", shortLink: true } : null;
 }
 
 function hasPair(
@@ -292,6 +352,7 @@ export function SummerCrewBuilder({
   sharedName,
   onResolveMyName,
   onTrack,
+  onCreateOuting,
 }: {
   myType: SummerTypeKey | null;
   myName: string;
@@ -299,6 +360,7 @@ export function SummerCrewBuilder({
   sharedName: string;
   onResolveMyName: () => Promise<string>;
   onTrack: (name: string, params?: Record<string, string | number>) => void;
+  onCreateOuting?: (suggestion: OutingSuggestion) => void;
 }) {
   const [friends, setFriends] = useState<FriendType[]>(getSavedFriends);
   const [receivedType, setReceivedType] =
@@ -326,9 +388,10 @@ export function SummerCrewBuilder({
   const [addOpen, setAddOpen] = useState(false);
   const [friendName, setFriendName] = useState("");
   const [friendLink, setFriendLink] = useState("");
+  const [manualType, setManualType] = useState<SummerTypeKey | null>(null);
   const [addError, setAddError] = useState("");
   const [shareState, setShareState] = useState<
-    "idle" | "sharing" | "shared" | "copied"
+    "idle" | "sharing" | "shared" | "copied" | "failed"
   >("idle");
   useEffect(() => {
     setSelectedIds((current) => {
@@ -368,6 +431,7 @@ export function SummerCrewBuilder({
   const openAddFriend = () => {
     setFriendName(receivedType ? sharedName : "");
     setFriendLink("");
+    setManualType(null);
     setAddError("");
     setAddOpen(true);
     onTrack("summer_friend_add_opened", {
@@ -377,14 +441,20 @@ export function SummerCrewBuilder({
 
   const addFriend = () => {
     const name = friendName.trim().replace(/\s+/g, " ").slice(0, 12);
-    const parsedLink = parseFriendTypeLink(friendLink);
-    const type = receivedType ?? parsedLink?.type ?? null;
+    const parsedLink = friendLink.trim()
+      ? parseFriendTypeLink(friendLink)
+      : null;
+    const type = receivedType ?? manualType ?? parsedLink?.type ?? null;
     if (name.length < 1) {
       setAddError("친구 이름을 입력해 주세요.");
       return;
     }
     if (!type) {
-      setAddError("챙겨썸 성향 결과 공유 링크를 확인해 주세요.");
+      setAddError(
+        parsedLink?.shortLink
+          ? "토스 공유 링크는 친구 결과를 직접 열어야 확인돼요. 링크를 열거나 아래에서 친구 유형을 골라 주세요."
+          : "결과 링크를 확인하거나 아래에서 친구 유형을 골라 주세요.",
+      );
       return;
     }
     const id = `friend_${Date.now().toString(36)}`;
@@ -430,14 +500,6 @@ export function SummerCrewBuilder({
     if (shareState === "sharing" || selectedMembers.length < 2) return;
     setShareState("sharing");
     const resolvedMyName = await onResolveMyName();
-    const url = new URL(window.location.href);
-    url.searchParams.set("tab", "type");
-    url.searchParams.set(
-      "crew",
-      selectedMembers.map((member) => member.type).join(","),
-    );
-    url.searchParams.delete("summerType");
-    url.searchParams.delete("summerName");
     const memberNames = selectedMembers
       .map(
         (member) =>
@@ -450,26 +512,24 @@ export function SummerCrewBuilder({
       `추천 모임: ${result.recommendedPlace}`,
       "너도 성향 테스트하고 우리 조합에 합류할래?",
     ].join("\n");
-
-    try {
-      if (typeof window.navigator.share === "function") {
-        await window.navigator.share({
-          title: `챙겨썸 | ${result.name}`,
-          text,
-          url: url.toString(),
-        });
-        setShareState("shared");
-      } else {
-        await window.navigator.clipboard.writeText(`${text}\n${url}`);
-        setShareState("copied");
-      }
-      onTrack("summer_crew_shared", {
-        crew_size: selectedMembers.length,
-        score: result.score,
-      });
-    } catch {
-      setShareState("idle");
+    const shareQuery = `tab=type&crew=${encodeURIComponent(
+      selectedMembers.map((member) => member.type).join(","),
+    )}`;
+    const outcome = await shareContent({
+      title: `챙겨썸 | ${result.name}`,
+      message: text,
+      deepLink: `intoss://${APP_NAME}?${shareQuery}`,
+      webLink: `${window.location.origin}/?${shareQuery}`,
+    });
+    if (outcome === "cancelled" || outcome === "failed") {
+      setShareState(outcome === "failed" ? "failed" : "idle");
+      return;
     }
+    setShareState(outcome);
+    onTrack("summer_crew_shared", {
+      crew_size: selectedMembers.length,
+      score: result.score,
+    });
   };
 
   return (
@@ -642,8 +702,25 @@ export function SummerCrewBuilder({
                   ? "친구에게 공유했어요"
                   : shareState === "copied"
                     ? "조합 링크를 복사했어요"
-                    : "우리 조합 공유하기"}
+                    : shareState === "failed"
+                      ? "공유하지 못했어요 · 다시 시도"
+                      : "우리 조합 공유하기"}
             </button>
+            {onCreateOuting ? (
+              <button
+                className="summer-crew-create"
+                type="button"
+                onClick={() => {
+                  onCreateOuting(suggestOutingForCrew(result.recommendedPlace));
+                  onTrack("summer_crew_outing_started", {
+                    crew_size: selectedMembers.length,
+                  });
+                }}
+              >
+                <CalendarIcon aria-hidden="true" />
+                이 조합으로 모임 만들기
+              </button>
+            ) : null}
           </article>
         ) : members.length > 0 ? (
           <div className="summer-crew-waiting">
@@ -686,11 +763,11 @@ export function SummerCrewBuilder({
           </label>
           {!receivedResult ? (
             <label>
-              <span>친구가 보낸 결과 링크</span>
+              <span>친구가 보낸 결과 링크나 메시지</span>
               <input
                 value={friendLink}
                 inputMode="url"
-                placeholder="https://.../?summerType=..."
+                placeholder="공유 메시지를 그대로 붙여넣어도 돼요"
                 onChange={(event) => {
                   const nextLink = event.target.value;
                   const parsedLink = parseFriendTypeLink(nextLink);
@@ -702,6 +779,32 @@ export function SummerCrewBuilder({
                 }}
               />
             </label>
+          ) : null}
+          {!receivedResult ? (
+            <fieldset className="summer-friend-type-picker">
+              <legend>링크가 없다면 친구 유형을 직접 골라요</legend>
+              <div>
+                {TYPE_ORDER.map((typeKey) => {
+                  const typeResult = SUMMER_TYPE_RESULTS[typeKey];
+                  const selected = manualType === typeKey;
+                  return (
+                    <button
+                      className={selected ? "is-selected" : ""}
+                      type="button"
+                      key={typeKey}
+                      aria-pressed={selected}
+                      onClick={() => {
+                        setManualType(selected ? null : typeKey);
+                        setAddError("");
+                      }}
+                    >
+                      <img src={typeResult.image} alt="" draggable={false} />
+                      <span>{typeResult.shortName}</span>
+                    </button>
+                  );
+                })}
+              </div>
+            </fieldset>
           ) : null}
           {addError ? <p className="form-error">{addError}</p> : null}
           <button

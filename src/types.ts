@@ -30,6 +30,9 @@ export interface CrowdSignal {
   liveSupported: boolean;
   forecast: CrowdForecast[];
   timingAdvice: CrowdTimingAdvice | null;
+  /** "outing"이면 모임 시간 기준 예상, "now"면 지금 기준이에요. */
+  basis?: "now" | "outing";
+  targetTime?: string;
 }
 
 export interface CrowdForecast {
@@ -141,6 +144,9 @@ export interface Outing {
   activityType: string;
   expectedPeople: number;
   createdAt: string;
+  placeCategory?: string | null;
+  placeImageUrl?: string | null;
+  isPast?: boolean;
 }
 
 export interface OutingWeather {
@@ -163,6 +169,8 @@ export interface RegionalWeather {
   weather: OutingWeather;
 }
 
+export type WeatherStatus = "ok" | "out_of_range" | "past" | "unavailable";
+
 export interface OutingBundle {
   status: "ok";
   outing: Outing;
@@ -171,8 +179,24 @@ export interface OutingBundle {
   events: OutingEvent[];
   viewer: Participant | null;
   canDelete: boolean;
+  isCreator?: boolean;
   weather: OutingWeather | null;
+  weatherStatus?: WeatherStatus;
+  maxParticipants?: number;
   smartRecommendations: SmartRecommendation[];
+}
+
+export interface OutingSummary {
+  outingId: string;
+  title: string;
+  placeName: string;
+  startsAt: string;
+  ready: number;
+  total: number;
+  unassigned: number;
+  myOpen: number;
+  canDelete: boolean;
+  isPast: boolean;
 }
 
 export interface AiBriefingAction {
@@ -214,7 +238,8 @@ export interface OutingEvent {
     | "completed_mine"
     | "item_added"
     | "item_deleted"
-    | "randomized";
+    | "randomized"
+    | "updated";
   itemLabel: string | null;
   createdAt: string;
   participant: Participant | null;

@@ -2,6 +2,7 @@ import type {
   ActivityOption,
   AiBriefingResponse,
   OutingBundle,
+  OutingSummary,
   ItemOption,
   OutingWeather,
   ParticipantSession,
@@ -11,6 +12,7 @@ import type {
   SavedSession,
   SmartRecommendation,
   SummerEventResponse,
+  WeatherStatus,
 } from "./types";
 import { getActiveAnonymousUserKey } from "./anonymous-user";
 
@@ -21,13 +23,25 @@ const API_BASE = (
   (import.meta.env.DEV ? "/api" : DEFAULT_PRODUCTION_API)
 ).replace(/\/$/, "");
 
-async function request<T>(
+export class ApiError extends Error {
+  readonly status: number;
+  readonly code: string;
+
+  constructor(message: string, status: number, code = "") {
+    super(message);
+    this.name = "ApiError";
+    this.status = status;
+    this.code = code;
+  }
+}
+
+function apiFetch(
   path: string,
   options: RequestInit = {},
   token?: string,
-): Promise<T> {
+) {
   const anonymousUserKey = getActiveAnonymousUserKey();
-  const response = await fetch(`${API_BASE}${path}`, {
+  return fetch(`${API_BASE}${path}`, {
     ...options,
     headers: {
       ...(options.body ? { "content-type": "application/json" } : {}),
@@ -38,14 +52,42 @@ async function request<T>(
       ...options.headers,
     },
   });
+}
 
+async function readJson<T>(response: Response): Promise<T> {
   const payload = (await response.json().catch(() => ({}))) as {
     error?: string;
+    code?: string;
   };
   if (!response.ok) {
-    throw new Error(payload.error ?? "요청을 처리하지 못했어요.");
+    throw new ApiError(
+      payload.error ??
+        (response.status === 429
+          ? "요청이 너무 많아요. 잠시 후 다시 시도해 주세요."
+          : "요청을 처리하지 못했어요."),
+      response.status,
+      payload.code ?? "",
+    );
   }
   return payload as T;
+}
+
+async function request<T>(
+  path: string,
+  options: RequestInit = {},
+  token?: string,
+): Promise<T> {
+  let response: Response;
+  try {
+    response = await apiFetch(path, options, token);
+  } catch {
+    throw new ApiError(
+      "네트워크 연결을 확인해 주세요.",
+      0,
+      "network_error",
+    );
+  }
+  return readJson<T>(response);
 }
 
 export function listMySessions() {
@@ -118,6 +160,7 @@ export function getPackingRecommendations(input: {
   return request<{
     activityType: string;
     weather: OutingWeather | null;
+    weatherStatus?: WeatherStatus;
     recommendations: SmartRecommendation[];
   }>(`/packing-recommendations?${query}`);
 }
@@ -132,6 +175,7 @@ export function createOuting(input: {
   itemKeys: string[];
   customItems: string[];
   customPlace?: Place;
+  avatarKey?: string;
 }) {
   return request<{
     session: ParticipantSession;
@@ -154,6 +198,78 @@ export function getOuting(
     {},
     options.token,
   );
+}
+
+/**
+ * ETag를 보내 바뀐 내용이 없으면 본문 없이 304를 받아요.
+ * 폴링 때 같은 모임 데이터를 반복해서 내려받지 않게 해요.
+ */
+export async function getOutingIfChanged(
+  outingId: string,
+  options: { token?: string; inviteCode?: string; etag?: string | null } = {},
+): Promise<
+  | { changed: false }
+  | { changed: true; bundle: OutingBundle; etag: string | null }
+> {
+  const query = options.inviteCode
+    ? `?invite=${encodeURIComponent(options.inviteCode)}`
+    : "";
+  let response: Response;
+  try {
+    response = await apiFetch(
+      `/outings/${encodeURIComponent(outingId)}${query}`,
+      {
+        cache: "no-store",
+        headers: options.etag ? { "if-none-match": options.etag } : {},
+      },
+      options.token,
+    );
+  } catch {
+    throw new ApiError(
+      "네트워크 연결을 확인해 주세요.",
+      0,
+      "network_error",
+    );
+  }
+  if (response.status === 304) return { changed: false };
+  const bundle = await readJson<OutingBundle>(response);
+  return { changed: true, bundle, etag: response.headers.get("etag") };
+}
+
+export function updateOuting(
+  outingId: string,
+  token: string,
+  patch: {
+    title?: string;
+    startsAt?: string;
+    placeId?: string;
+    customPlace?: Place;
+    activityType?: string;
+    expectedPeople?: number;
+  },
+) {
+  return request<{ outing: OutingBundle }>(
+    `/outings/${encodeURIComponent(outingId)}`,
+    { method: "PATCH", body: JSON.stringify(patch) },
+    token,
+  );
+}
+
+export function resetInviteCode(outingId: string, token: string) {
+  return request<{ inviteCode: string }>(
+    `/outings/${encodeURIComponent(outingId)}/invite-code`,
+    { method: "POST" },
+    token,
+  );
+}
+
+export function getOutingSummaries(
+  sessions: Array<{ outingId: string; token: string }>,
+) {
+  return request<{ summaries: OutingSummary[] }>("/outing-summaries", {
+    method: "POST",
+    body: JSON.stringify({ sessions: sessions.slice(0, 30) }),
+  });
 }
 
 export function deleteOuting(outingId: string, token: string) {
@@ -190,11 +306,17 @@ export function searchSummerEvents(outingId: string, token: string) {
 
 export function joinOuting(
   outingId: string,
-  input: { inviteCode: string; name: string },
+  input: {
+    inviteCode: string;
+    name: string;
+    avatarKey?: string;
+    claimItemId?: string;
+  },
 ) {
   return request<{
     session: ParticipantSession;
     outing: OutingBundle;
+    claimResult?: "claimed" | "taken" | "none";
   }>(`/outings/${encodeURIComponent(outingId)}/join`, {
     method: "POST",
     body: JSON.stringify(input),

@@ -14,6 +14,7 @@ import {
   RocketIcon,
 } from "@radix-ui/react-icons";
 
+import type { ShareOutcome } from "../platform";
 import { Sheet } from "./Sheet";
 
 export type SummerTypeKey =
@@ -328,7 +329,7 @@ export function SummerTypeTest({
   sharedType: SummerTypeKey | null;
   sharedName: string;
   onTrack: (name: string, params?: Record<string, string | number>) => void;
-  onShare: (result: SummerTypeResult) => Promise<"shared" | "copied">;
+  onShare: (result: SummerTypeResult) => Promise<ShareOutcome>;
   onResultChange: (result: SummerTypeKey) => void;
 }) {
   const [open, setOpen] = useState(false);
@@ -339,7 +340,7 @@ export function SummerTypeTest({
   );
   const [showResult, setShowResult] = useState(false);
   const [shareState, setShareState] = useState<
-    "idle" | "sharing" | "shared" | "copied"
+    "idle" | "sharing" | "shared" | "copied" | "failed"
   >("idle");
   const sharedResult = sharedType ? SUMMER_TYPE_RESULTS[sharedType] : null;
   const result = resultKey ? SUMMER_TYPE_RESULTS[resultKey] : null;
@@ -434,8 +435,8 @@ export function SummerTypeTest({
     if (!result || shareState === "sharing") return;
     setShareState("sharing");
     try {
-      const nextState = await onShare(result);
-      setShareState(nextState);
+      const outcome = await onShare(result);
+      setShareState(outcome === "cancelled" ? "idle" : outcome);
     } catch {
       setShareState("idle");
     }
@@ -536,7 +537,9 @@ export function SummerTypeTest({
                   ? "친구에게 공유했어요"
                   : shareState === "copied"
                     ? "결과 링크를 복사했어요"
-                    : "친구에게 결과 공유하기"}
+                    : shareState === "failed"
+                      ? "공유하지 못했어요 · 다시 시도"
+                      : "친구에게 결과 공유하기"}
             </button>
 
             <div className="summer-type-result__story">

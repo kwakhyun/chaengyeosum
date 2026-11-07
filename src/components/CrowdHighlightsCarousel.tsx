@@ -1,11 +1,8 @@
 import { useEffect, useRef, useState, type UIEvent } from "react";
 
+import { formatKoreaTime } from "../time";
 import type { Place } from "../types";
 import { CrowdPulseVisual } from "./CrowdPulseVisual";
-
-function observedTime(value: string) {
-  return value.includes(" ") ? value.slice(11, 16) : value.slice(11, 16);
-}
 
 export function CrowdHighlightsCarousel({
   places,
@@ -17,6 +14,9 @@ export function CrowdHighlightsCarousel({
   const trackRef = useRef<HTMLDivElement>(null);
   const [activeIndex, setActiveIndex] = useState(0);
   const livePlaces = places.filter((place) => place.currentCrowd);
+  const hasOfficialLive = livePlaces.some(
+    (place) => place.currentCrowd?.mode === "live",
+  );
 
   useEffect(() => {
     if (activeIndex >= livePlaces.length) setActiveIndex(0);
@@ -59,9 +59,9 @@ export function CrowdHighlightsCarousel({
           <p className="eyebrow">HANGANG LIVE</p>
           <h2 id="crowd-highlights-title">지금 한강, 자리 있을까?</h2>
         </div>
-        <span>
+        <span className={hasOfficialLive ? "" : "is-estimate"}>
           <i aria-hidden="true" />
-          서울 실시간
+          {hasOfficialLive ? "서울 실시간" : "시간대 예상"}
         </span>
       </div>
 
@@ -72,6 +72,11 @@ export function CrowdHighlightsCarousel({
             <strong>한강 분위기를 읽는 중</strong>
             <small>현재 추정 인구와 덜 붐비는 시간을 확인해요</small>
           </div>
+        </div>
+      ) : livePlaces.length === 0 ? (
+        <div className="highlights-empty" role="status">
+          <strong>혼잡 정보를 잠시 불러오지 못했어요</strong>
+          <small>잠시 후 다시 열어보면 최신 정보로 보여드릴게요.</small>
         </div>
       ) : (
         <>
@@ -95,7 +100,7 @@ export function CrowdHighlightsCarousel({
                       <strong>{place.name}</strong>
                     </div>
                     <small>
-                      {observedTime(crowd.observedAt)} 기준
+                      {formatKoreaTime(crowd.observedAt)} 기준
                     </small>
                   </header>
                   <CrowdPulseVisual
@@ -113,7 +118,7 @@ export function CrowdHighlightsCarousel({
                     </div>
                     <span>
                       {crowd.timingAdvice?.peakTime
-                        ? `피크 ${crowd.timingAdvice.peakTime.slice(11, 16)}`
+                        ? `피크 ${formatKoreaTime(crowd.timingAdvice.peakTime)}`
                         : "시간대별 예상"}
                     </span>
                   </footer>
@@ -137,7 +142,9 @@ export function CrowdHighlightsCarousel({
             ))}
           </div>
           <p className="crowd-highlights__note">
-            통신사 데이터를 바탕으로 한 서울시 추정 범위예요.
+            {hasOfficialLive
+              ? "통신사 데이터를 바탕으로 한 서울시 추정 범위예요."
+              : "요일·시간·계절을 반영한 참고용 예상치예요."}
           </p>
         </>
       )}

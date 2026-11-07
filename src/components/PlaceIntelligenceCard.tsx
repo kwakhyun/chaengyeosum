@@ -5,19 +5,17 @@ import {
   ReloadIcon,
 } from "@radix-ui/react-icons";
 
+import { formatDateKey, formatKoreaTime, koreaDateKey } from "../time";
 import type { CrowdSignal, SummerEventSearch } from "../types";
 import { CrowdPulseVisual } from "./CrowdPulseVisual";
 
-function observedLabel(value: string, live: boolean) {
-  if (!live) return "현재 시간 기준 계산";
-  const parsed = new Date(value.replace(" ", "T"));
-  if (!Number.isNaN(parsed.valueOf())) {
-    return new Intl.DateTimeFormat("ko-KR", {
-      hour: "numeric",
-      minute: "2-digit",
-    }).format(parsed);
+function observedLabel(crowd: CrowdSignal) {
+  if (crowd.basis === "outing" && crowd.targetTime) {
+    return `${formatDateKey(koreaDateKey(crowd.targetTime), false)} ${formatKoreaTime(crowd.targetTime)} 예상`;
   }
-  return value;
+  const time = formatKoreaTime(crowd.observedAt);
+  if (crowd.mode === "live") return time ? `${time} 기준` : "실시간";
+  return time ? `지금(${time}) 기준 예상` : "지금 기준 예상";
 }
 
 export function PlaceIntelligenceCard({
@@ -30,6 +28,7 @@ export function PlaceIntelligenceCard({
   eventError,
   onRefreshCrowd,
   onSearchEvents,
+  eventsDisabledReason = "",
 }: {
   placeName: string;
   crowd: CrowdSignal | null;
@@ -40,7 +39,9 @@ export function PlaceIntelligenceCard({
   eventError: string;
   onRefreshCrowd: () => void;
   onSearchEvents: () => void;
+  eventsDisabledReason?: string;
 }) {
+  const forOuting = crowd?.basis === "outing";
   return (
     <section
       className="place-intelligence-card"
@@ -52,7 +53,9 @@ export function PlaceIntelligenceCard({
         </span>
         <div>
           <p>PLACE PULSE</p>
-          <h2 id="place-intelligence-title">지금 이곳, 얼마나 붐빌까?</h2>
+          <h2 id="place-intelligence-title">
+            {forOuting ? "모임 날, 얼마나 붐빌까?" : "지금 이곳, 얼마나 붐빌까?"}
+          </h2>
         </div>
         <button
           type="button"
@@ -67,7 +70,7 @@ export function PlaceIntelligenceCard({
       {crowdLoading && !crowd ? (
         <div className="crowd-loading" role="status">
           <span aria-hidden="true" />
-          <p>현재 혼잡 신호를 분석하고 있어요…</p>
+          <p>혼잡 신호를 분석하고 있어요…</p>
         </div>
       ) : crowd ? (
         <div className={`crowd-result crowd-result--${crowd.level}`}>
@@ -80,9 +83,7 @@ export function PlaceIntelligenceCard({
               </span>
               <strong>{placeName}</strong>
             </div>
-            <small>
-              {observedLabel(crowd.observedAt, crowd.mode === "live")}
-            </small>
+            <small>{observedLabel(crowd)}</small>
           </div>
           <CrowdPulseVisual crowd={crowd} placeName={placeName} />
           <p>{crowd.summary}</p>
@@ -112,7 +113,7 @@ export function PlaceIntelligenceCard({
                     key={item.time}
                   >
                     <time dateTime={item.time}>
-                      {item.time.slice(11, 16)}
+                      {formatKoreaTime(item.time)}
                     </time>
                     <i aria-hidden="true" />
                     <strong>{item.label}</strong>
@@ -163,7 +164,9 @@ export function PlaceIntelligenceCard({
           </div>
         </div>
 
-        {events ? (
+        {eventsDisabledReason && !events ? (
+          <p className="summer-events__empty">{eventsDisabledReason}</p>
+        ) : events ? (
           <>
             <div className="summer-events__summary">
               <strong>{events.headline}</strong>
@@ -196,7 +199,7 @@ export function PlaceIntelligenceCard({
             <button
               className="summer-events__refresh"
               type="button"
-              disabled={eventLoading}
+              disabled={eventLoading || Boolean(eventsDisabledReason)}
               onClick={onSearchEvents}
             >
               <ReloadIcon aria-hidden="true" />

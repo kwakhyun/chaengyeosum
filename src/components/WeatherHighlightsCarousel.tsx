@@ -86,6 +86,11 @@ export function WeatherHighlightsCarousel({
             <small>서울부터 제주까지 확인하고 있어요</small>
           </div>
         </div>
+      ) : regions.length === 0 ? (
+        <div className="highlights-empty" role="status">
+          <strong>날씨 예보를 잠시 불러오지 못했어요</strong>
+          <small>잠시 후 다시 열어보면 지역별 예보를 보여드릴게요.</small>
+        </div>
       ) : (
         <>
           <div

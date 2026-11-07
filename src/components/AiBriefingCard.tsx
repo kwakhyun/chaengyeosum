@@ -69,6 +69,7 @@ export function AiBriefingCard({
   onGenerate,
   onShare,
   onFocusItem,
+  disabledReason = "",
 }: {
   briefing: AiOutingBriefing | null;
   loading: boolean;
@@ -77,6 +78,7 @@ export function AiBriefingCard({
   onGenerate: () => void;
   onShare: () => void;
   onFocusItem: (itemKey: string) => void;
+  disabledReason?: string;
 }) {
   return (
     <section
@@ -89,13 +91,20 @@ export function AiBriefingCard({
           <MagicWandIcon aria-hidden="true" />
         </span>
         <div>
-          <p>OPENAI BRIEFING</p>
+          <p>AI BRIEFING</p>
           <h2 id="ai-briefing-title">AI 출발 전 브리핑</h2>
         </div>
         {briefing ? <b>준비 상태 분석</b> : null}
       </div>
 
-      {!briefing && !loading ? (
+      {!briefing && !loading && disabledReason ? (
+        <div className="ai-briefing-intro">
+          <strong>브리핑을 만들 수 없는 모임이에요</strong>
+          <p>{disabledReason}</p>
+        </div>
+      ) : null}
+
+      {!briefing && !loading && !disabledReason ? (
         <div className="ai-briefing-intro">
           <strong>우리 모임, 지금 출발해도 괜찮을까요?</strong>
           <p>
@@ -163,7 +172,7 @@ export function AiBriefingCard({
               <CopyIcon aria-hidden="true" />
               결과 공유하기
             </button>
-            {stale ? (
+            {stale && !disabledReason ? (
               <button type="button" onClick={onGenerate}>
                 <ReloadIcon aria-hidden="true" />
                 업데이트

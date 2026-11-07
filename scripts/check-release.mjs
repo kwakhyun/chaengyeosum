@@ -4,7 +4,11 @@ import { fileURLToPath } from "node:url";
 
 const root = dirname(dirname(fileURLToPath(import.meta.url)));
 const read = (path) => readFileSync(join(root, path), "utf8");
-const app = read("src/App.tsx");
+const app = [
+  "src/App.tsx",
+  "src/OutingPage.tsx",
+].map(read).join("\n");
+const platform = read("src/platform.ts");
 const sheet = read("src/components/Sheet.tsx");
 const popularSummerPlaces = read("src/components/PopularSummerPlaces.tsx");
 const styles = read("src/styles.css");
@@ -16,6 +20,7 @@ const source = [
   ...[
     "src/api.ts",
     "src/session.ts",
+    "src/platform.ts",
     "src/components/Sheet.tsx",
     "src/components/SummerTypeTest.tsx",
   ].map(read),
@@ -90,9 +95,10 @@ const checks = [
   {
     name: "공유 링크 전용 이미지와 문구 연결",
     pass:
-      app.includes("SHARE_OG_IMAGE_URL") &&
-      app.match(/getTossShareLink\([\s\S]*?SHARE_OG_IMAGE_URL/g)?.length ===
-        3 &&
+      // 모든 공유는 platform.ts의 shareContent 한 곳에서 토스 공유 링크를 만들어요.
+      platform.includes("SHARE_OG_IMAGE_URL") &&
+      /getTossShareLink\([\s\S]*?SHARE_OG_IMAGE_URL/.test(platform) &&
+      (app.match(/shareContent\(/g)?.length ?? 0) >= 3 &&
       app.includes("같이 챙길래?"),
   },
   {
