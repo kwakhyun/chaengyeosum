@@ -1,3 +1,5 @@
+import { getKoreaDateKey } from "./kst-date.mjs";
+
 export const SUMMER_EVENT_MODEL = "gpt-5.6";
 export const SUMMER_EVENT_CACHE_TTL_MS = 6 * 60 * 60 * 1000;
 export const SUMMER_EVENT_DAILY_LIMIT = 3;
@@ -201,15 +203,6 @@ function placeCity(place) {
   return chunks.at(-1)?.trim() || "대한민국";
 }
 
-function kstDateKey(date) {
-  return new Intl.DateTimeFormat("en-CA", {
-    timeZone: "Asia/Seoul",
-    year: "numeric",
-    month: "2-digit",
-    day: "2-digit",
-  }).format(date);
-}
-
 async function sha256(value) {
   const digest = await crypto.subtle.digest(
     "SHA-256",
@@ -221,7 +214,7 @@ async function sha256(value) {
 }
 
 export async function getSummerEventSearchState({ outing, place, now }) {
-  const dateKey = kstDateKey(now);
+  const dateKey = getKoreaDateKey(now);
   const input = {
     placeName: cleanText(place.name, 60),
     city: placeCity(place),

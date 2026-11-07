@@ -1,4 +1,17 @@
-const CACHE_TTL_MS = 30 * 60 * 1000;
+import {
+  addDaysToDateKey,
+  getKoreaDateKey,
+  getOutingDateKey,
+} from "./kst-date.mjs";
+
+export { getKoreaDateKey } from "./kst-date.mjs";
+
+export const WEATHER_CACHE_TTL_MS = 30 * 60 * 1000;
+// Open-Meteo 호출이 실패하면 폴링이 외부 API를 계속 두드리지 않도록
+// 실패 결과도 10분 동안 기억해요.
+export const WEATHER_FAILURE_TTL_MS = 10 * 60 * 1000;
+// Open-Meteo 예보는 오늘 포함 16일(오늘 ~ 오늘+15일)까지 제공돼요.
+export const WEATHER_FORECAST_MAX_DAYS_AHEAD = 15;
 
 export const WEATHER_REGIONS = [
   {
@@ -30,21 +43,6 @@ export const WEATHER_REGIONS = [
     longitude: 126.5312,
   },
 ];
-
-export function getKoreaDateKey(date = new Date()) {
-  const parts = new Intl.DateTimeFormat("en-CA", {
-    timeZone: "Asia/Seoul",
-    year: "numeric",
-    month: "2-digit",
-    day: "2-digit",
-  }).formatToParts(date);
-  const value = Object.fromEntries(
-    parts
-      .filter((part) => part.type !== "literal")
-      .map((part) => [part.type, part.value]),
-  );
-  return `${value.year}-${value.month}-${value.day}`;
-}
 
 function uvLabel(value) {
   if (value >= 8) return "자외선 매우 높음";
@@ -84,7 +82,8 @@ export async function getForecastWeather(outing, fetchImpl = fetch) {
     );
     if (!response.ok) throw new Error(`weather_${response.status}`);
     const data = await response.json();
-    const dateKey = outing.startsAt.slice(0, 10);
+    const dateKey = getOutingDateKey(outing.startsAt);
+    if (!dateKey) return null;
     const index = data.daily?.time?.indexOf(dateKey) ?? -1;
     if (index < 0) return null;
 
@@ -127,16 +126,97 @@ export async function getRegionalWeatherHighlights(fetchImpl = fetch) {
   };
 }
 
-export async function getOutingWeather(store, outing, fetchImpl = fetch) {
-  const cached = store.getWeatherCache(outing.id);
-  if (cached && Date.now() - cached.fetchedAt < CACHE_TTL_MS) {
-    return cached.payload;
+/**
+ * 모임 날짜가 예보 범위 안인지 판단해요.
+ * "past" | "out_of_range" | "ok" (날짜를 읽을 수 없으면 "unavailable")
+ */
+export function getWeatherWindowStatus(startsAt, now = Date.now()) {
+  const dateKey = getOutingDateKey(startsAt);
+  if (!dateKey) return "unavailable";
+  const today = getKoreaDateKey(now);
+  if (dateKey < today) return "past";
+  if (dateKey > addDaysToDateKey(today, WEATHER_FORECAST_MAX_DAYS_AHEAD)) {
+    return "out_of_range";
+  }
+  return "ok";
+}
+
+export function getWeatherCacheTtl(payload) {
+  return payload ? WEATHER_CACHE_TTL_MS : WEATHER_FAILURE_TTL_MS;
+}
+
+export function isWeatherCacheFresh(payload, fetchedAt, now = Date.now()) {
+  return now - Number(fetchedAt) < getWeatherCacheTtl(payload);
+}
+
+/**
+ * ETag의 weatherStamp를 DB 조회 없이 계산해요.
+ * 새로 예보를 받아야 해서 값을 알 수 없으면 null이에요.
+ */
+export function getCachedWeatherStamp({
+  weatherStatus,
+  cachePayload,
+  cacheFetchedAt,
+  now = Date.now(),
+  enabled = true,
+  allowStale = false,
+}) {
+  if (weatherStatus !== "ok" || !enabled) return 0;
+  if (cacheFetchedAt == null) return null;
+  if (!allowStale && !isWeatherCacheFresh(cachePayload, cacheFetchedAt, now)) {
+    return null;
+  }
+  return Number(cacheFetchedAt);
+}
+
+/**
+ * 모임 날씨를 캐시와 함께 계산해요.
+ * - 예보 범위 밖이면 Open-Meteo를 부르지 않아요.
+ * - 실패하면 null(=unavailable)을 10분 캐시해요.
+ * - scheduleRefresh가 있으면 오래된 캐시를 먼저 돌려주고 뒤에서 갱신해요.
+ */
+export async function resolveOutingWeather({
+  outing,
+  readCache,
+  writeCache,
+  fetchImpl = fetch,
+  now = Date.now(),
+  enabled = true,
+  scheduleRefresh = null,
+}) {
+  const windowStatus = getWeatherWindowStatus(outing.startsAt, now);
+  if (windowStatus !== "ok") {
+    return { weather: null, weatherStatus: windowStatus, weatherStamp: 0 };
+  }
+  if (!enabled) {
+    return { weather: null, weatherStatus: "unavailable", weatherStamp: 0 };
   }
 
-  const weather = await getForecastWeather(outing, fetchImpl);
-  if (weather) {
-    store.putWeatherCache(outing.id, weather);
-    return weather;
+  const refresh = async () => {
+    const weather = await getForecastWeather(outing, fetchImpl);
+    const fetchedAt = now;
+    await writeCache(weather ?? null, fetchedAt);
+    return {
+      weather: weather ?? null,
+      weatherStatus: weather ? "ok" : "unavailable",
+      weatherStamp: fetchedAt,
+    };
+  };
+
+  const cached = await readCache();
+  if (cached) {
+    const fromCache = {
+      weather: cached.payload ?? null,
+      weatherStatus: cached.payload ? "ok" : "unavailable",
+      weatherStamp: Number(cached.fetchedAt),
+    };
+    if (isWeatherCacheFresh(cached.payload, cached.fetchedAt, now)) {
+      return fromCache;
+    }
+    if (scheduleRefresh) {
+      scheduleRefresh(refresh);
+      return fromCache;
+    }
   }
-  return cached?.payload ?? null;
+  return refresh();
 }

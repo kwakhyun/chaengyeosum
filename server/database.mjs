@@ -9,12 +9,29 @@ import { dirname } from "node:path";
 import { DatabaseSync } from "node:sqlite";
 
 import { MAX_ITEMS } from "./item-options.mjs";
+import { getKoreaDateKey } from "./kst-date.mjs";
 import {
-  getSuggestedQuantity,
-  normalizeExpectedPeople,
-} from "./smart-packing.mjs";
+  assembleOutingSummaries,
+  buildOutingUpdate,
+  canDeleteItem,
+  diffOutingChanges,
+  getCleanupCutoffs,
+  mapMySessionRow,
+  MAX_PARTICIPANTS,
+  pickViewer,
+  planItemUpdate,
+  planRandomAssignments,
+  resolveAvatarKey,
+  shouldLinkAnonymousUser,
+} from "./outing-rules.mjs";
+import {
+  CLEANUP_SQL,
+  NORMALIZE_STARTS_AT_SQL,
+  SQL,
+  SUMMARY_SQL,
+} from "./outing-sql.mjs";
 
-const AVATAR_KEYS = ["me", "minji", "junho", "seoyeon"];
+const MAX_WRITE_ATTEMPTS = 3;
 
 function tokenHash(token) {
   return createHash("sha256").update(token).digest("hex");
@@ -30,6 +47,10 @@ function createToken() {
 
 function createInviteCode() {
   return randomBytes(7).toString("base64url");
+}
+
+function changes(result) {
+  return Number(result?.changes ?? 0);
 }
 
 export function createStore(filename) {
@@ -55,7 +76,8 @@ export function createStore(filename) {
       starts_at TEXT NOT NULL,
       activity_type TEXT NOT NULL DEFAULT 'picnic',
       expected_people INTEGER NOT NULL DEFAULT 2,
-      created_at TEXT NOT NULL
+      created_at TEXT NOT NULL,
+      revision INTEGER NOT NULL DEFAULT 0
     );
 
     CREATE TABLE IF NOT EXISTS participants (
@@ -113,6 +135,16 @@ export function createStore(filename) {
 
     CREATE INDEX IF NOT EXISTS event_reactions_event_idx
       ON event_reactions(event_id);
+
+    CREATE TABLE IF NOT EXISTS rate_limits (
+      bucket TEXT NOT NULL,
+      window_start INTEGER NOT NULL,
+      count INTEGER NOT NULL DEFAULT 0,
+      PRIMARY KEY (bucket, window_start)
+    );
+
+    CREATE INDEX IF NOT EXISTS rate_limits_window_idx
+      ON rate_limits(window_start);
   `);
 
   const outingColumns = db.prepare("PRAGMA table_info(outings)").all();
@@ -126,6 +158,11 @@ export function createStore(filename) {
       "ALTER TABLE outings ADD COLUMN expected_people INTEGER NOT NULL DEFAULT 2",
     );
   }
+  if (!outingColumns.some((column) => column.name === "revision")) {
+    db.exec(
+      "ALTER TABLE outings ADD COLUMN revision INTEGER NOT NULL DEFAULT 0",
+    );
+  }
   const participantColumns = db.prepare("PRAGMA table_info(participants)").all();
   if (
     !participantColumns.some(
@@ -137,213 +174,40 @@ export function createStore(filename) {
   db.exec(`
     CREATE UNIQUE INDEX IF NOT EXISTS participants_outing_anonymous_idx
       ON participants(outing_id, anonymous_user_hash)
-      WHERE anonymous_user_hash IS NOT NULL
+      WHERE anonymous_user_hash IS NOT NULL;
+
+    CREATE INDEX IF NOT EXISTS participants_anonymous_user_idx
+      ON participants(anonymous_user_hash);
+
+    CREATE INDEX IF NOT EXISTS outings_starts_at_idx
+      ON outings(starts_at);
   `);
+  db.exec(NORMALIZE_STARTS_AT_SQL);
 
-  const statements = {
-    insertOuting: db.prepare(`
-      INSERT INTO outings (
-        id, invite_code, title, place_id, place_name,
-        latitude, longitude, starts_at, activity_type, expected_people, created_at
-      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-    `),
-    insertParticipant: db.prepare(`
-      INSERT INTO participants (
-        id, outing_id, name, avatar_key, token_hash,
-        anonymous_user_hash, joined_at
-      ) VALUES (?, ?, ?, ?, ?, ?, ?)
-    `),
-    insertItem: db.prepare(`
-      INSERT INTO checklist_items (
-        id, outing_id, item_key, label, image, owner_id, done, sort_order
-      ) VALUES (?, ?, ?, ?, ?, ?, 0, ?)
-    `),
-    getOuting: db.prepare("SELECT * FROM outings WHERE id = ?"),
-    getParticipants: db.prepare(`
-      SELECT id, name, avatar_key, joined_at
-      FROM participants
-      WHERE outing_id = ?
-      ORDER BY joined_at ASC
-    `),
-    getItems: db.prepare(`
-      SELECT id, item_key, label, image, owner_id, done, sort_order
-      FROM checklist_items
-      WHERE outing_id = ?
-      ORDER BY sort_order ASC
-    `),
-    getUnassignedItems: db.prepare(`
-      SELECT id, label
-      FROM checklist_items
-      WHERE outing_id = ? AND owner_id IS NULL
-      ORDER BY sort_order ASC
-    `),
-    getOwnerCounts: db.prepare(`
-      SELECT owner_id, COUNT(*) AS count
-      FROM checklist_items
-      WHERE outing_id = ? AND owner_id IS NOT NULL
-      GROUP BY owner_id
-    `),
-    getEvents: db.prepare(`
-      SELECT id, participant_id, event_type, item_label, created_at
-      FROM activity_events
-      WHERE outing_id = ?
-      ORDER BY created_at DESC, rowid DESC
-      LIMIT 8
-    `),
-    insertEvent: db.prepare(`
-      INSERT INTO activity_events (
-        id, outing_id, participant_id, event_type, item_label, created_at
-      ) VALUES (?, ?, ?, ?, ?, ?)
-    `),
-    getEvent: db.prepare(`
-      SELECT id FROM activity_events WHERE id = ? AND outing_id = ?
-    `),
-    getReactions: db.prepare(`
-      SELECT event_id, participant_id, reaction_type
-      FROM event_reactions
-      WHERE event_id IN (
-        SELECT id FROM activity_events WHERE outing_id = ?
-      )
-    `),
-    getReaction: db.prepare(`
-      SELECT reaction_type FROM event_reactions
-      WHERE event_id = ? AND participant_id = ?
-    `),
-    upsertReaction: db.prepare(`
-      INSERT INTO event_reactions (
-        event_id, participant_id, reaction_type, created_at
-      ) VALUES (?, ?, ?, ?)
-      ON CONFLICT(event_id, participant_id) DO UPDATE SET
-        reaction_type = excluded.reaction_type,
-        created_at = excluded.created_at
-    `),
-    deleteReaction: db.prepare(`
-      DELETE FROM event_reactions
-      WHERE event_id = ? AND participant_id = ?
-    `),
-    getParticipantByToken: db.prepare(`
-      SELECT id, outing_id, name, avatar_key, joined_at
-      FROM participants
-      WHERE token_hash = ?
-    `),
-    getParticipantByAnonymousUser: db.prepare(`
-      SELECT id, outing_id, name, avatar_key, joined_at
-      FROM participants
-      WHERE anonymous_user_hash = ? AND outing_id = ?
-    `),
-    getSessionsByAnonymousUser: db.prepare(`
-      SELECT
-        participants.id AS participant_id,
-        outings.id AS outing_id,
-        outings.title,
-        outings.place_name,
-        outings.starts_at,
-        outings.activity_type
-      FROM participants
-      JOIN outings ON outings.id = participants.outing_id
-      WHERE participants.anonymous_user_hash = ?
-      ORDER BY outings.created_at DESC
-      LIMIT 20
-    `),
-    linkAnonymousUser: db.prepare(`
-      UPDATE participants
-      SET anonymous_user_hash = ?
-      WHERE id = ?
-        AND anonymous_user_hash IS NULL
-        AND NOT EXISTS (
-          SELECT 1 FROM participants AS existing
-          WHERE existing.outing_id = ?
-            AND existing.anonymous_user_hash = ?
-        )
-    `),
-    getParticipant: db.prepare(`
-      SELECT id, outing_id, name, avatar_key, joined_at
-      FROM participants
-      WHERE id = ? AND outing_id = ?
-    `),
-    participantCount: db.prepare(`
-      SELECT COUNT(*) AS count FROM participants WHERE outing_id = ?
-    `),
-    getItem: db.prepare(`
-      SELECT * FROM checklist_items WHERE id = ? AND outing_id = ?
-    `),
-    getItemByKey: db.prepare(`
-      SELECT * FROM checklist_items WHERE item_key = ? AND outing_id = ?
-    `),
-    getItemByLabel: db.prepare(`
-      SELECT * FROM checklist_items WHERE label = ? AND outing_id = ?
-    `),
-    itemCount: db.prepare(`
-      SELECT COUNT(*) AS count FROM checklist_items WHERE outing_id = ?
-    `),
-    nextSortOrder: db.prepare(`
-      SELECT COALESCE(MAX(sort_order), -1) + 1 AS next_order
-      FROM checklist_items
-      WHERE outing_id = ?
-    `),
-    updateDone: db.prepare(`
-      UPDATE checklist_items SET done = ? WHERE id = ? AND outing_id = ?
-    `),
-    updateOwner: db.prepare(`
-      UPDATE checklist_items SET owner_id = ?, done = 0
-      WHERE id = ? AND outing_id = ?
-    `),
-    completeMine: db.prepare(`
-      UPDATE checklist_items SET done = 1
-      WHERE outing_id = ? AND owner_id = ?
-    `),
-    deleteItem: db.prepare(`
-      DELETE FROM checklist_items WHERE id = ? AND outing_id = ?
-    `),
-    deleteOuting: db.prepare(`
-      DELETE FROM outings WHERE id = ?
-    `),
-    getWeather: db.prepare(`
-      SELECT payload, fetched_at FROM weather_cache WHERE outing_id = ?
-    `),
-    putWeather: db.prepare(`
-      INSERT INTO weather_cache (outing_id, payload, fetched_at)
-      VALUES (?, ?, ?)
-      ON CONFLICT(outing_id) DO UPDATE SET
-        payload = excluded.payload,
-        fetched_at = excluded.fetched_at
-    `),
-  };
-
-  function mapParticipant(row) {
-    if (!row) return null;
-    return {
-      id: row.id,
-      name: row.name,
-      avatarKey: row.avatar_key,
-      joinedAt: row.joined_at,
-    };
+  const statementCache = new Map();
+  function stmt(sql) {
+    let statement = statementCache.get(sql);
+    if (!statement) {
+      statement = db.prepare(sql);
+      statementCache.set(sql, statement);
+    }
+    return statement;
   }
 
-  function mapOuting(row) {
-    if (!row) return null;
-    return {
-      id: row.id,
-      inviteCode: row.invite_code,
-      title: row.title,
-      placeId: row.place_id,
-      placeName: row.place_name,
-      latitude: row.latitude,
-      longitude: row.longitude,
-      startsAt: row.starts_at,
-      activityType: row.activity_type,
-      expectedPeople: Number(row.expected_people ?? 2),
-      createdAt: row.created_at,
-    };
+  function transaction(run) {
+    db.exec("BEGIN IMMEDIATE");
+    try {
+      const result = run();
+      db.exec("COMMIT");
+      return result;
+    } catch (error) {
+      db.exec("ROLLBACK");
+      throw error;
+    }
   }
 
-  function addEvent(
-    outingId,
-    participantId,
-    eventType,
-    itemLabel = null,
-  ) {
-    statements.insertEvent.run(
+  function addEvent(outingId, participantId, eventType, itemLabel = null) {
+    stmt(SQL.insertEvent).run(
       createOpaqueId("evt"),
       outingId,
       participantId,
@@ -353,90 +217,99 @@ export function createStore(filename) {
     );
   }
 
-  function authorize(outingId, token, anonymousUserKey = "") {
-    if (token) {
-      const participant = statements.getParticipantByToken.get(
-        tokenHash(token),
+  function bumpRevision(outingId) {
+    stmt(SQL.bumpRevision).run(outingId);
+  }
+
+  function participantName(participantId, outingId) {
+    if (!participantId) return "";
+    return stmt(SQL.participantName).get(participantId, outingId)?.name ?? "";
+  }
+
+  /**
+   * 모임 행·만든 사람·날씨 캐시를 읽고 참여자 권한을 확인해요.
+   * status: "ok" | "not_found" | "forbidden"
+   */
+  function resolveAccess(
+    outingId,
+    { token = "", anonymousUserKey = "", inviteCode = "" } = {},
+  ) {
+    const outingRow = stmt(SQL.outingAccess).get(outingId);
+    if (!outingRow) return { status: "not_found" };
+
+    const anonymousHash = anonymousUserKey
+      ? tokenHash(anonymousUserKey)
+      : null;
+    const tokenRow = token
+      ? (stmt(SQL.participantByToken).get(tokenHash(token), outingId) ?? null)
+      : null;
+    const anonymousRow = anonymousHash
+      ? (stmt(SQL.participantByAnonymous).get(anonymousHash, outingId) ??
+        null)
+      : null;
+    if (shouldLinkAnonymousUser(tokenRow, anonymousRow, anonymousHash)) {
+      stmt(SQL.linkAnonymousUser).run(
+        anonymousHash,
+        tokenRow.id,
+        outingId,
+        anonymousHash,
       );
-      if (participant?.outing_id === outingId) {
-        if (anonymousUserKey) {
-          const anonymousHash = tokenHash(anonymousUserKey);
-          statements.linkAnonymousUser.run(
-            anonymousHash,
-            participant.id,
-            outingId,
-            anonymousHash,
-          );
-        }
-        return mapParticipant(participant);
-      }
     }
-    if (!anonymousUserKey) return null;
-    return mapParticipant(
-      statements.getParticipantByAnonymousUser.get(
-        tokenHash(anonymousUserKey),
+    const viewer = pickViewer(tokenRow, anonymousRow);
+    if (!viewer && (!inviteCode || outingRow.invite_code !== inviteCode)) {
+      return { status: "forbidden", outingRow };
+    }
+    return {
+      status: "ok",
+      outingRow,
+      viewer,
+      isCreator: Boolean(viewer && viewer.id === outingRow.creator_id),
+    };
+  }
+
+  function getBundleRows(outingId, viewerId) {
+    return {
+      participantRows: stmt(SQL.participants).all(outingId),
+      itemRows: stmt(SQL.items).all(outingId),
+      eventRows: stmt(SQL.recentEvents).all(outingId),
+      reactionRows: stmt(SQL.recentEventReactions).all(
+        viewerId ?? null,
         outingId,
       ),
-    );
+    };
   }
 
-  function listMySessions(anonymousUserKey) {
-    if (!anonymousUserKey) return [];
-    return statements.getSessionsByAnonymousUser
-      .all(tokenHash(anonymousUserKey))
-      .map((row) => ({
-        participantId: row.participant_id,
-        token: "",
-        outingId: row.outing_id,
-        title: row.title,
-        placeName: row.place_name,
-        startsAt: row.starts_at,
-        activityType: row.activity_type,
-      }));
-  }
-
-  function createOuting({
-    title,
-    place,
-    startsAt,
-    activityType,
-    expectedPeople,
-    creatorName,
-    items,
-    anonymousUserKey = "",
-  }) {
+  function createOuting({ values, items, anonymousUserKey = "", avatarKey }) {
     const outingId = createOpaqueId("out");
     const participantId = createOpaqueId("pt");
     const token = createToken();
-    const inviteCode = createInviteCode();
     const now = new Date().toISOString();
 
-    db.exec("BEGIN IMMEDIATE");
-    try {
-      statements.insertOuting.run(
+    transaction(() => {
+      stmt(SQL.insertOuting).run(
         outingId,
-        inviteCode,
-        title,
-        place.id,
-        place.name,
-        place.latitude,
-        place.longitude,
-        startsAt,
-        activityType,
-        normalizeExpectedPeople(expectedPeople),
+        createInviteCode(),
+        values.title,
+        values.place.id,
+        values.place.name,
+        values.place.latitude,
+        values.place.longitude,
+        values.startsAt,
+        values.activityType,
+        values.expectedPeople,
         now,
       );
-      statements.insertParticipant.run(
+      stmt(SQL.insertParticipant).run(
         participantId,
         outingId,
-        creatorName,
-        "me",
+        values.creatorName,
+        resolveAvatarKey(avatarKey, 0),
         tokenHash(token),
         anonymousUserKey ? tokenHash(anonymousUserKey) : null,
         now,
       );
       items.forEach((item, index) => {
-        statements.insertItem.run(
+        stmt(SQL.insertItem).run(
           createOpaqueId("item"),
           outingId,
           item.key ?? createOpaqueId("custom"),
@@ -447,16 +320,31 @@ export function createStore(filename) {
         );
       });
       addEvent(outingId, participantId, "created");
-      db.exec("COMMIT");
-    } catch (error) {
-      db.exec("ROLLBACK");
-      throw error;
-    }
+    });
 
+    return { outingId, session: { participantId, token } };
+  }
+
+  function claimForJoin(outingId, participantId, claimItemId) {
+    if (!claimItemId) return { claimResult: "none", changed: false };
+    const item = stmt(SQL.item).get(claimItemId, outingId);
+    if (!item) return { claimResult: "none", changed: false };
+    if (item.owner_id == null) {
+      const result = stmt(SQL.assignIfUnowned).run(
+        participantId,
+        claimItemId,
+        outingId,
+      );
+      if (changes(result) > 0) {
+        addEvent(outingId, participantId, "claimed", item.label);
+        return { claimResult: "claimed", changed: true };
+      }
+    }
+    const owner = stmt(SQL.itemOwner).get(claimItemId, outingId);
+    if (!owner) return { claimResult: "none", changed: false };
     return {
-      outingId,
-      inviteCode,
-      session: { participantId, token },
+      claimResult: owner.owner_id === participantId ? "claimed" : "taken",
+      changed: false,
     };
   }
 
@@ -465,318 +353,340 @@ export function createStore(filename) {
     inviteCode,
     name,
     anonymousUserKey = "",
+    avatarKey,
+    claimItemId,
   }) {
-    const outing = statements.getOuting.get(outingId);
-    if (!outing || outing.invite_code !== inviteCode) return null;
-
+    const outing = stmt(SQL.outingInvite).get(outingId);
+    if (!outing || outing.invite_code !== inviteCode) {
+      return { error: "invalid_invite" };
+    }
     const anonymousHash = anonymousUserKey
       ? tokenHash(anonymousUserKey)
       : null;
-    if (anonymousHash) {
-      const existing = statements.getParticipantByAnonymousUser.get(
-        anonymousHash,
-        outingId,
-      );
+
+    return transaction(() => {
+      const token = createToken();
+      const existing = anonymousHash
+        ? stmt(SQL.participantByAnonymous).get(anonymousHash, outingId)
+        : null;
+      let participantId;
+      let changed = false;
+      let created = false;
       if (existing) {
-        return { participantId: existing.id, token: "" };
+        // 같은 토스 사용자가 다시 참여하면 기존 참여자에 새 토큰을 줘요.
+        participantId = existing.id;
+        stmt(SQL.rotateParticipantToken).run(tokenHash(token), participantId);
+      } else {
+        const count = Number(stmt(SQL.participantCount).get(outingId).count);
+        if (count >= MAX_PARTICIPANTS) return { error: "outing_full" };
+        participantId = createOpaqueId("pt");
+        const inserted = stmt(SQL.insertParticipantIfRoom).run(
+          participantId,
+          outingId,
+          name,
+          resolveAvatarKey(avatarKey, count),
+          tokenHash(token),
+          anonymousHash,
+          new Date().toISOString(),
+          outingId,
+        );
+        if (changes(inserted) === 0) return { error: "outing_full" };
+        addEvent(outingId, participantId, "joined");
+        changed = true;
+        created = true;
       }
-    }
-
-    const count = Number(statements.participantCount.get(outingId).count);
-    const participantId = createOpaqueId("pt");
-    const token = createToken();
-    const now = new Date().toISOString();
-    const avatarKey = AVATAR_KEYS[count % AVATAR_KEYS.length];
-
-    statements.insertParticipant.run(
-      participantId,
-      outingId,
-      name,
-      avatarKey,
-      tokenHash(token),
-      anonymousHash,
-      now,
-    );
-    addEvent(outingId, participantId, "joined");
-
-    return { participantId, token };
-  }
-
-  function getOutingBundle(
-    outingId,
-    { token, inviteCode, anonymousUserKey } = {},
-  ) {
-    const outingRow = statements.getOuting.get(outingId);
-    if (!outingRow) return { status: "not_found" };
-
-    const viewer = authorize(outingId, token, anonymousUserKey);
-    if (!viewer && outingRow.invite_code !== inviteCode) {
-      return { status: "forbidden" };
-    }
-
-    const participants = statements
-      .getParticipants
-      .all(outingId)
-      .map(mapParticipant);
-    const participantById = new Map(
-      participants.map((participant) => [participant.id, participant]),
-    );
-    const items = statements.getItems.all(outingId).map((row) => ({
-      id: row.id,
-      key: row.item_key,
-      label: row.label,
-      visual: row.image.includes(":") ? row.image : `asset:${row.image}`,
-      owner: row.owner_id ? (participantById.get(row.owner_id) ?? null) : null,
-      done: row.done === 1,
-      sortOrder: row.sort_order,
-      ...getSuggestedQuantity(
-        row.item_key,
-        Number(outingRow.expected_people ?? 2),
-      ),
-    }));
-    const reactionRows = statements.getReactions.all(outingId);
-    const reactionMap = new Map();
-    for (const row of reactionRows) {
-      const current = reactionMap.get(row.event_id) ?? {
-        heart: 0,
-        cheer: 0,
-        viewerReaction: null,
-      };
-      if (row.reaction_type === "heart") current.heart += 1;
-      if (row.reaction_type === "cheer") current.cheer += 1;
-      if (viewer?.id === row.participant_id) {
-        current.viewerReaction = row.reaction_type;
-      }
-      reactionMap.set(row.event_id, current);
-    }
-    const events = statements.getEvents.all(outingId).map((row) => {
-      const reactions = reactionMap.get(row.id) ?? {
-        heart: 0,
-        cheer: 0,
-        viewerReaction: null,
-      };
+      const claim = claimForJoin(outingId, participantId, claimItemId);
+      if (changed || claim.changed) bumpRevision(outingId);
       return {
-        id: row.id,
-        type: row.event_type,
-        itemLabel: row.item_label,
-        createdAt: row.created_at,
-        participant: row.participant_id
-          ? (participantById.get(row.participant_id) ?? null)
-          : null,
-        reactions: {
-          heart: reactions.heart,
-          cheer: reactions.cheer,
-        },
-        viewerReaction: reactions.viewerReaction,
+        status: "ok",
+        created,
+        session: { participantId, token },
+        claimResult: claim.claimResult,
       };
     });
+  }
 
+  function updateOuting({ outingRow, viewer, values }) {
+    const diff = diffOutingChanges(outingRow, values);
+    if (!diff.changed) return { status: "ok", changed: false };
+    const update = buildOutingUpdate(outingRow.id, diff.changes);
+    transaction(() => {
+      stmt(update.sql).run(...update.params);
+      addEvent(outingRow.id, viewer.id, "updated");
+      if (diff.invalidatesWeather) stmt(SQL.deleteWeather).run(outingRow.id);
+    });
     return {
       status: "ok",
-      outing: mapOuting(outingRow),
-      participants,
-      items,
-      events,
-      viewer,
-      canDelete: Boolean(viewer && participants[0]?.id === viewer.id),
+      changed: true,
+      invalidatesWeather: diff.invalidatesWeather,
     };
   }
 
-  function updateItem({
-    outingId,
-    itemId,
-    token,
-    anonymousUserKey,
-    done,
-    ownerId,
-  }) {
-    const viewer = authorize(outingId, token, anonymousUserKey);
-    if (!viewer) return { status: "forbidden" };
-    const item = statements.getItem.get(itemId, outingId);
-    if (!item) return { status: "not_found" };
-
-    if (typeof ownerId !== "undefined") {
-      if (
-        ownerId !== null &&
-        !statements.getParticipant.get(ownerId, outingId)
-      ) {
-        return { status: "invalid_owner" };
-      }
-      statements.updateOwner.run(ownerId, itemId, outingId);
-      if (ownerId) {
-        addEvent(outingId, ownerId, "claimed", item.label);
-      } else {
-        addEvent(outingId, viewer.id, "unassigned", item.label);
-      }
-    }
-    if (typeof done === "boolean") {
-      statements.updateDone.run(done ? 1 : 0, itemId, outingId);
-      addEvent(
-        outingId,
-        viewer.id,
-        done ? "completed" : "reopened",
-        item.label,
-      );
-    }
-    return { status: "ok" };
+  function resetInviteCode(outingId) {
+    const inviteCode = createInviteCode();
+    stmt(SQL.resetInviteCode).run(inviteCode, outingId);
+    return { status: "ok", inviteCode };
   }
 
-  function completeMyItems({ outingId, token, anonymousUserKey }) {
-    const viewer = authorize(outingId, token, anonymousUserKey);
-    if (!viewer) return { status: "forbidden" };
-    const result = statements.completeMine.run(outingId, viewer.id);
-    if (Number(result.changes) > 0) {
-      addEvent(outingId, viewer.id, "completed_mine");
-    }
-    return { status: "ok", completed: Number(result.changes) };
-  }
-
-  function addItem({ outingId, token, anonymousUserKey, item }) {
-    const viewer = authorize(outingId, token, anonymousUserKey);
-    if (!viewer) return { status: "forbidden" };
-    if (Number(statements.itemCount.get(outingId).count) >= MAX_ITEMS) {
-      return { status: "max_items" };
-    }
-    if (
-      (item.key && statements.getItemByKey.get(item.key, outingId)) ||
-      statements.getItemByLabel.get(item.label, outingId)
-    ) {
-      return { status: "duplicate" };
-    }
-
-    const sortOrder = Number(
-      statements.nextSortOrder.get(outingId).next_order,
+  function updateItem({ outingId, itemId, viewer, isCreator, ownerId, done }) {
+    const participantIds = new Set(
+      stmt(SQL.participants)
+        .all(outingId)
+        .map((row) => row.id),
     );
+    for (let attempt = 0; attempt < MAX_WRITE_ATTEMPTS; attempt += 1) {
+      const item = stmt(SQL.item).get(itemId, outingId);
+      if (!item) return { error: "item_update_failed" };
+      const plan = planItemUpdate({
+        item,
+        viewerId: viewer.id,
+        isCreator,
+        requestedOwnerId: ownerId,
+        requestedDone: done,
+        participantIds,
+      });
+      if (plan.error === "already_claimed") {
+        return {
+          error: plan.error,
+          ownerName: participantName(plan.ownerId, outingId),
+        };
+      }
+      if (plan.error) return { error: plan.error };
+      if (plan.noop) return { status: "ok" };
+
+      const applied = transaction(() => {
+        const result = stmt(SQL.updateItemIfUnchanged).run(
+          plan.ownerId,
+          plan.done ? 1 : 0,
+          itemId,
+          outingId,
+          item.owner_id ?? null,
+          Number(item.done),
+        );
+        if (changes(result) === 0) return false;
+        for (const event of plan.events) {
+          addEvent(outingId, event.participantId, event.type, item.label);
+        }
+        bumpRevision(outingId);
+        return true;
+      });
+      if (applied) return { status: "ok" };
+    }
+    const latest = stmt(SQL.item).get(itemId, outingId);
+    if (!latest) return { error: "item_update_failed" };
+    return {
+      error: "already_claimed",
+      ownerName: participantName(latest.owner_id, outingId),
+    };
+  }
+
+  function addItem({ outingId, viewer, item }) {
     const itemId = createOpaqueId("item");
-    statements.insertItem.run(
-      itemId,
-      outingId,
-      item.key ?? createOpaqueId("custom"),
-      item.label,
-      item.visual,
-      null,
-      sortOrder,
-    );
-    addEvent(outingId, viewer.id, "item_added", item.label);
-    return { status: "ok", itemId };
+    return transaction(() => {
+      const result = stmt(SQL.insertItemIfAllowed).run(
+        itemId,
+        outingId,
+        item.key ?? createOpaqueId("custom"),
+        item.label,
+        item.visual,
+        outingId,
+        outingId,
+        item.key ?? "",
+        item.label,
+        outingId,
+      );
+      if (changes(result) === 0) {
+        const count = Number(stmt(SQL.itemCount).get(outingId).count);
+        return { error: count >= MAX_ITEMS ? "max_items" : "duplicate_item" };
+      }
+      addEvent(outingId, viewer.id, "item_added", item.label);
+      bumpRevision(outingId);
+      return { status: "ok", itemId };
+    });
   }
 
-  function deleteItem({ outingId, itemId, token, anonymousUserKey }) {
-    const viewer = authorize(outingId, token, anonymousUserKey);
-    if (!viewer) return { status: "forbidden" };
-    const item = statements.getItem.get(itemId, outingId);
-    if (!item) return { status: "not_found" };
-    if (Number(statements.itemCount.get(outingId).count) <= 1) {
-      return { status: "last_item" };
+  function deleteItem({ outingId, itemId, viewer, isCreator }) {
+    for (let attempt = 0; attempt < MAX_WRITE_ATTEMPTS; attempt += 1) {
+      const item = stmt(SQL.item).get(itemId, outingId);
+      if (!item) return { error: "item_not_found" };
+      if (!canDeleteItem({ item, viewerId: viewer.id, isCreator })) {
+        return { error: "forbidden_delete" };
+      }
+      const outcome = transaction(() => {
+        const result = stmt(SQL.deleteItemIfAllowed).run(
+          itemId,
+          outingId,
+          item.owner_id ?? null,
+          outingId,
+        );
+        if (changes(result) === 0) {
+          const count = Number(stmt(SQL.itemCount).get(outingId).count);
+          return count <= 1 ? "last_item" : "retry";
+        }
+        addEvent(outingId, viewer.id, "item_deleted", item.label);
+        bumpRevision(outingId);
+        return "ok";
+      });
+      if (outcome === "ok") return { status: "ok" };
+      if (outcome === "last_item") return { error: "last_item" };
     }
-    const result = statements.deleteItem.run(itemId, outingId);
-    if (Number(result.changes) > 0) {
-      addEvent(outingId, viewer.id, "item_deleted", item.label);
-    }
-    return Number(result.changes) > 0
-      ? { status: "ok" }
-      : { status: "not_found" };
+    return { error: "item_not_found" };
   }
 
-  function deleteOuting({ outingId, token, anonymousUserKey }) {
-    const viewer = authorize(outingId, token, anonymousUserKey);
-    if (!viewer) return { status: "forbidden" };
-    const creator = statements.getParticipants.get(outingId);
-    if (!creator || creator.id !== viewer.id) {
-      return { status: "not_creator" };
-    }
-    const result = statements.deleteOuting.run(outingId);
-    return Number(result.changes) > 0
-      ? { status: "ok" }
-      : { status: "not_found" };
+  function completeMyItems({ outingId, viewer }) {
+    return transaction(() => {
+      const completed = changes(
+        stmt(SQL.completeMine).run(outingId, viewer.id),
+      );
+      if (completed > 0) {
+        addEvent(outingId, viewer.id, "completed_mine");
+        bumpRevision(outingId);
+      }
+      return { status: "ok", completed };
+    });
   }
 
-  function randomizeUnassigned({ outingId, token, anonymousUserKey }) {
-    const viewer = authorize(outingId, token, anonymousUserKey);
-    if (!viewer) return { status: "forbidden" };
-    const participants = statements
-      .getParticipants
+  function randomizeUnassigned({ outingId, viewer }) {
+    const participantIds = stmt(SQL.participants)
       .all(outingId)
-      .map(mapParticipant);
-    const unassigned = statements.getUnassignedItems.all(outingId);
-    if (participants.length < 2) return { status: "need_participants" };
-    if (unassigned.length === 0) return { status: "nothing_to_assign" };
+      .map((row) => row.id);
+    const unassigned = stmt(SQL.unassignedItems).all(outingId);
+    if (participantIds.length < 2) return { error: "need_participants" };
+    if (unassigned.length === 0) return { error: "nothing_to_assign" };
 
-    const counts = new Map(
-      statements.getOwnerCounts
+    const assignments = planRandomAssignments({
+      participantIds,
+      unassignedItemIds: unassigned.map((row) => row.id),
+      ownerCounts: stmt(SQL.ownerCounts)
         .all(outingId)
         .map((row) => [row.owner_id, Number(row.count)]),
-    );
-    const shuffled = [...unassigned];
-    for (let index = shuffled.length - 1; index > 0; index -= 1) {
-      const target = randomInt(index + 1);
-      [shuffled[index], shuffled[target]] = [
-        shuffled[target],
-        shuffled[index],
-      ];
-    }
-
-    db.exec("BEGIN IMMEDIATE");
-    try {
-      for (const item of shuffled) {
-        const lowestCount = Math.min(
-          ...participants.map(
-            (participant) => counts.get(participant.id) ?? 0,
-          ),
+      randomInt,
+    });
+    return transaction(() => {
+      let assigned = 0;
+      for (const { itemId, ownerId } of assignments) {
+        assigned += changes(
+          stmt(SQL.assignIfUnowned).run(ownerId, itemId, outingId),
         );
-        const candidates = participants.filter(
-          (participant) =>
-            (counts.get(participant.id) ?? 0) === lowestCount,
-        );
-        const owner = candidates[randomInt(candidates.length)];
-        statements.updateOwner.run(owner.id, item.id, outingId);
-        counts.set(owner.id, (counts.get(owner.id) ?? 0) + 1);
       }
-      addEvent(
-        outingId,
-        viewer.id,
-        "randomized",
-        String(shuffled.length),
-      );
-      db.exec("COMMIT");
-    } catch (error) {
-      db.exec("ROLLBACK");
-      throw error;
-    }
-    return { status: "ok", assigned: shuffled.length };
+      if (assigned === 0) return { error: "nothing_to_assign" };
+      addEvent(outingId, viewer.id, "randomized", String(assigned));
+      bumpRevision(outingId);
+      return { status: "ok", assigned };
+    });
   }
 
-  function toggleEventReaction({
-    outingId,
-    eventId,
-    token,
-    anonymousUserKey,
-    reactionType,
-  }) {
-    const viewer = authorize(outingId, token, anonymousUserKey);
-    if (!viewer) return { status: "forbidden" };
-    if (!statements.getEvent.get(eventId, outingId)) {
-      return { status: "not_found" };
-    }
+  function toggleEventReaction({ outingId, eventId, viewer, reactionType }) {
     if (!["heart", "cheer"].includes(reactionType)) {
-      return { status: "invalid_reaction" };
+      return { error: "invalid_reaction" };
     }
-    const existing = statements.getReaction.get(eventId, viewer.id);
-    if (existing?.reaction_type === reactionType) {
-      statements.deleteReaction.run(eventId, viewer.id);
-      return { status: "ok", reaction: null };
+    if (!stmt(SQL.event).get(eventId, outingId)) {
+      return { error: "event_not_found" };
     }
-    statements.upsertReaction.run(
-      eventId,
-      viewer.id,
-      reactionType,
-      new Date().toISOString(),
+    return transaction(() => {
+      const existing = stmt(SQL.reaction).get(eventId, viewer.id);
+      let reaction = reactionType;
+      if (existing?.reaction_type === reactionType) {
+        stmt(SQL.deleteReaction).run(eventId, viewer.id);
+        reaction = null;
+      } else {
+        stmt(SQL.upsertReaction).run(
+          eventId,
+          viewer.id,
+          reactionType,
+          new Date().toISOString(),
+        );
+      }
+      bumpRevision(outingId);
+      return { status: "ok", reaction };
+    });
+  }
+
+  function deleteOuting(outingId) {
+    return changes(stmt(SQL.deleteOuting).run(outingId)) > 0
+      ? { status: "ok" }
+      : { error: "not_found" };
+  }
+
+  function listMySessions(anonymousUserKey, now = Date.now()) {
+    if (!anonymousUserKey) return [];
+    const today = getKoreaDateKey(now);
+    return stmt(SQL.mySessions)
+      .all(tokenHash(anonymousUserKey), today, today)
+      .map((row) => mapMySessionRow(row, now));
+  }
+
+  function getOutingSummaries(sessions, anonymousUserKey = "", now = Date.now()) {
+    if (sessions.length === 0) return [];
+    const outingIds = sessions.map((session) => session.outingId);
+    const tokenHashes = sessions.map((session) =>
+      session.token ? tokenHash(session.token) : null,
     );
-    return { status: "ok", reaction: reactionType };
+    const presentHashes = tokenHashes.filter(Boolean);
+    const anonymousHash = anonymousUserKey
+      ? tokenHash(anonymousUserKey)
+      : null;
+
+    const { summaries, links } = assembleOutingSummaries({
+      sessions,
+      tokenHashes,
+      anonymousHash,
+      tokenRows:
+        presentHashes.length > 0
+          ? stmt(SUMMARY_SQL.tokenParticipants(presentHashes.length)).all(
+              ...presentHashes,
+            )
+          : [],
+      anonymousRows: anonymousHash
+        ? stmt(SUMMARY_SQL.anonymousParticipants(outingIds.length)).all(
+            anonymousHash,
+            ...outingIds,
+          )
+        : [],
+      outingRows: stmt(SUMMARY_SQL.outings(outingIds.length)).all(
+        ...outingIds,
+      ),
+      itemRows: stmt(SUMMARY_SQL.items(outingIds.length)).all(...outingIds),
+      now,
+    });
+    for (const link of links) {
+      stmt(SQL.linkAnonymousUser).run(
+        anonymousHash,
+        link.participantId,
+        link.outingId,
+        anonymousHash,
+      );
+    }
+    return summaries;
+  }
+
+  /**
+   * 여러 사용량 버킷을 차례로 1씩 올려요. 하나라도 한도를 넘으면
+   * 앞에서 올린 값을 되돌리고 그 버킷을 알려줘요.
+   */
+  function consumeRateLimits(entries, windowStart) {
+    const consumed = [];
+    for (const entry of entries) {
+      const row = stmt(SQL.consumeRateLimit).get(
+        entry.bucket,
+        windowStart,
+        entry.limit,
+      );
+      if (!row) {
+        for (const previous of consumed) {
+          stmt(SQL.releaseRateLimit).run(previous.bucket, windowStart);
+        }
+        return { limited: entry };
+      }
+      consumed.push(entry);
+    }
+    return { limited: null };
   }
 
   function getWeatherCache(outingId) {
-    const row = statements.getWeather.get(outingId);
+    const row = stmt(
+      "SELECT payload, fetched_at FROM weather_cache WHERE outing_id = ?",
+    ).get(outingId);
     if (!row) return null;
     try {
       return { payload: JSON.parse(row.payload), fetchedAt: row.fetched_at };
@@ -785,29 +695,54 @@ export function createStore(filename) {
     }
   }
 
-  function putWeatherCache(outingId, payload) {
-    statements.putWeather.run(
+  function putWeatherCache(outingId, payload, fetchedAt = Date.now()) {
+    stmt(SQL.putWeather).run(
       outingId,
-      JSON.stringify(payload),
-      Date.now(),
+      JSON.stringify(payload ?? null),
+      fetchedAt,
     );
+  }
+
+  /** 180일 지난 모임과 오래된 사용량 기록을 지워요. */
+  function cleanup(now = Date.now()) {
+    const cutoffs = getCleanupCutoffs(now);
+    let deletedOutings = 0;
+    for (let round = 0; round < 50; round += 1) {
+      const ids = stmt(CLEANUP_SQL.expiredOutingIds)
+        .all(cutoffs.outingDateKey)
+        .map((row) => row.id);
+      if (ids.length === 0) break;
+      transaction(() => {
+        for (const sql of CLEANUP_SQL.deleteForOutings(ids.length)) {
+          stmt(sql).run(...ids);
+        }
+      });
+      deletedOutings += ids.length;
+    }
+    stmt(CLEANUP_SQL.deleteOldRateLimits).run(cutoffs.rateWindowBefore);
+    return { deletedOutings };
   }
 
   return {
     addItem,
-    authorize,
+    cleanup,
     close: () => db.close(),
     completeMyItems,
+    consumeRateLimits,
     createOuting,
     deleteItem,
     deleteOuting,
-    getOutingBundle,
+    getBundleRows,
+    getOutingSummaries,
     getWeatherCache,
     joinOuting,
     listMySessions,
     putWeatherCache,
     randomizeUnassigned,
+    resetInviteCode,
+    resolveAccess,
     toggleEventReaction,
     updateItem,
+    updateOuting,
   };
 }

@@ -9,8 +9,10 @@ import {
   getBriefingState,
 } from "./ai-briefing.mjs";
 import {
+  estimateCrowd,
   estimateCurrentCrowd,
   getCurrentCrowdIntelligence,
+  normalizeCrowdResponse,
 } from "./crowd-intelligence.mjs";
 import {
   getItemOption,
@@ -19,6 +21,32 @@ import {
   normalizeCustomLabel,
   resolveItemSelection,
 } from "./item-options.mjs";
+import {
+  getKoreaDateKey,
+  isOutingToday,
+  isPastOuting,
+  normalizeStartsAt,
+  parseDateInput,
+} from "./kst-date.mjs";
+import {
+  apiError,
+  asObject,
+  buildOutingBundle,
+  cleanText,
+  enrichBundle,
+  errorForException,
+  etagMatches,
+  formatOutingEtag,
+  identityRateBucket,
+  mapOutingRow,
+  outingPlace,
+  outingRateBucket,
+  parseOutingInput,
+  parseSummarySessions,
+  pickClientIp,
+  RATE_LIMITS,
+  rateLimitWindowStart,
+} from "./outing-rules.mjs";
 import {
   getCustomPlace,
   getPlace,
@@ -39,42 +67,99 @@ import {
   SUMMER_EVENT_MODEL,
 } from "./summer-events.mjs";
 import {
+  getCachedWeatherStamp,
   getForecastWeather,
-  getKoreaDateKey,
-  getOutingWeather,
   getRegionalWeatherHighlights,
+  getWeatherWindowStatus,
+  resolveOutingWeather,
 } from "./weather.mjs";
 
 const MAX_BODY_BYTES = 32 * 1024;
+const MEMORY_CACHE_LIMIT = 500;
+const CROWD_CACHE_TTL_MS = 5 * 60 * 1000;
+const WEATHER_HIGHLIGHTS_TTL_MS = 30 * 60 * 1000;
+const CLEANUP_INTERVAL_MS = 24 * 60 * 60 * 1000;
 
-function json(response, status, body) {
+const BASE_HEADERS = {
+  "access-control-allow-headers":
+    "authorization, content-type, if-none-match, x-chaengyeosum-user-key",
+  "access-control-allow-methods": "GET, POST, PATCH, DELETE, OPTIONS",
+  "access-control-allow-origin": "*",
+  "access-control-expose-headers": "etag",
+  "cache-control": "no-store",
+};
+const OUTING_CACHE_CONTROL = "private, no-cache";
+
+function json(response, status, body, headers = {}) {
   response.writeHead(status, {
-    "access-control-allow-headers":
-      "authorization, content-type, x-chaengyeosum-user-key",
-    "access-control-allow-methods": "GET, POST, PATCH, DELETE, OPTIONS",
-    "access-control-allow-origin": "*",
-    "cache-control": "no-store",
+    ...BASE_HEADERS,
     "content-type": "application/json; charset=utf-8",
+    ...headers,
   });
   response.end(JSON.stringify(body));
 }
 
-function text(value, maxLength) {
-  return typeof value === "string"
-    ? value.trim().replace(/\s+/g, " ").slice(0, maxLength)
-    : "";
+function empty(response, status, headers = {}) {
+  response.writeHead(status, { ...BASE_HEADERS, ...headers });
+  response.end();
+}
+
+function sendError(response, key, details) {
+  const { status, body } = apiError(key, details);
+  json(response, status, body);
+}
+
+/** 오래된 항목부터 지우는 크기 제한 Map이에요. */
+class BoundedCache {
+  constructor(limit = MEMORY_CACHE_LIMIT) {
+    this.limit = limit;
+    this.map = new Map();
+  }
+
+  get(key) {
+    return this.map.get(key);
+  }
+
+  set(key, value) {
+    if (this.map.has(key)) this.map.delete(key);
+    this.map.set(key, value);
+    while (this.map.size > this.limit) {
+      this.map.delete(this.map.keys().next().value);
+    }
+    return this;
+  }
+}
+
+function header(request, name) {
+  const value = request.headers[name];
+  return typeof value === "string" ? value : "";
 }
 
 function bearerToken(request) {
-  const authorization = request.headers.authorization ?? "";
+  const authorization = header(request, "authorization");
   return authorization.startsWith("Bearer ")
     ? authorization.slice("Bearer ".length)
     : "";
 }
 
 function anonymousUserKey(request) {
-  const value = request.headers["x-chaengyeosum-user-key"];
-  return typeof value === "string" && value.length <= 512 ? value : "";
+  const value = header(request, "x-chaengyeosum-user-key");
+  return value.length <= 512 ? value : "";
+}
+
+function credentials(request) {
+  return {
+    token: bearerToken(request),
+    anonymousUserKey: anonymousUserKey(request),
+  };
+}
+
+function clientIp(request) {
+  return pickClientIp({
+    cfConnectingIp: header(request, "cf-connecting-ip"),
+    forwardedFor: header(request, "x-forwarded-for"),
+    fallback: request.socket?.remoteAddress ?? "",
+  });
 }
 
 async function readBody(request) {
@@ -89,10 +174,20 @@ async function readBody(request) {
   return JSON.parse(Buffer.concat(chunks).toString("utf8"));
 }
 
-function validDate(value) {
-  if (typeof value !== "string") return false;
-  const date = new Date(value);
-  return !Number.isNaN(date.valueOf());
+function weatherCacheFromRow(row) {
+  if (row?.weather_fetched_at == null) return null;
+  try {
+    return {
+      payload: JSON.parse(row.weather_payload),
+      fetchedAt: Number(row.weather_fetched_at),
+    };
+  } catch {
+    return null;
+  }
+}
+
+function startsAtMs(startsAt) {
+  return parseDateInput(startsAt) ?? Date.parse(startsAt);
 }
 
 export function createApiServer({
@@ -103,85 +198,286 @@ export function createApiServer({
   aiModel = AI_BRIEFING_MODEL,
   eventModel = SUMMER_EVENT_MODEL,
   seoulOpenDataApiKey = process.env.SEOUL_OPEN_DATA_API_KEY ?? "",
+  now = () => Date.now(),
+  cleanupIntervalMs = CLEANUP_INTERVAL_MS,
 }) {
   const store = createStore(dbFile);
-  const aiBriefingCache = new Map();
-  const aiBriefingUsage = new Map();
-  const crowdCache = new Map();
-  const regionalWeatherCache = new Map();
-  const summerEventCache = new Map();
-  const summerEventUsage = new Map();
+  const aiBriefingCache = new BoundedCache();
+  const crowdCache = new BoundedCache();
+  const regionalWeatherCache = new BoundedCache();
+  const summerEventCache = new BoundedCache();
 
-  async function enrichBundle(bundle) {
-    if (bundle.status !== "ok") return bundle;
-    const weather = weatherEnabled
-      ? await getOutingWeather(store, bundle.outing, fetchImpl)
-      : null;
+  // 시작할 때와 하루마다 오래된 모임·사용량 기록을 정리해요.
+  const runCleanup = () => {
+    try {
+      store.cleanup(now());
+    } catch (error) {
+      console.error("cleanup_failed", error?.message ?? error);
+    }
+  };
+  runCleanup();
+  const cleanupTimer =
+    cleanupIntervalMs > 0 ? setInterval(runCleanup, cleanupIntervalMs) : null;
+  cleanupTimer?.unref?.();
+
+  async function consumeLimits(request, entries) {
+    const resolved = await Promise.all(
+      entries.map(async (entry) => ({
+        ...entry,
+        bucket:
+          entry.bucket ??
+          (await identityRateBucket(entry.identity, {
+            userKey: anonymousUserKey(request),
+            ip: clientIp(request),
+          })),
+      })),
+    );
+    const { limited } = store.consumeRateLimits(
+      resolved,
+      rateLimitWindowStart(now()),
+    );
+    return limited?.error ?? null;
+  }
+
+  function identityLimit(config) {
     return {
-      ...bundle,
-      weather,
-      smartRecommendations: getSmartPackingRecommendations({
-        activityType: bundle.outing.activityType,
-        place:
-          getPlace(bundle.outing.placeId) ?? {
-            id: bundle.outing.placeId,
-            name: bundle.outing.placeName,
-            latitude: bundle.outing.latitude,
-            longitude: bundle.outing.longitude,
-          },
-        weather,
-        expectedPeople: bundle.outing.expectedPeople,
+      identity: config.bucket,
+      limit: config.limit,
+      error: "rate_limited",
+    };
+  }
+
+  function resolveWeather(outing, outingRow, nowMs) {
+    return resolveOutingWeather({
+      outing,
+      readCache: () => weatherCacheFromRow(outingRow),
+      writeCache: (payload, fetchedAt) =>
+        store.putWeatherCache(outing.id, payload, fetchedAt),
+      fetchImpl,
+      now: nowMs,
+      enabled: weatherEnabled,
+    });
+  }
+
+  async function buildEnrichedBundle(access, nowMs = now()) {
+    const { outingRow, viewer } = access;
+    const rows = store.getBundleRows(outingRow.id, viewer?.id ?? null);
+    const bundle = buildOutingBundle({
+      outingRow,
+      ...rows,
+      viewer,
+      now: nowMs,
+    });
+    const weatherInfo = await resolveWeather(bundle.outing, outingRow, nowMs);
+    return {
+      bundle: enrichBundle(bundle, weatherInfo),
+      etag: formatOutingEtag({
+        revision: outingRow.revision,
+        weatherStamp: weatherInfo.weatherStamp,
+        viewerId: viewer?.id ?? null,
       }),
     };
   }
 
-  async function getAiBriefing(request, response, outingId) {
-    const bundle = store.getOutingBundle(outingId, {
-      token: bearerToken(request),
-      anonymousUserKey: anonymousUserKey(request),
+  async function loadEnrichedBundle(outingId, creds) {
+    const access = store.resolveAccess(outingId, creds);
+    if (access.status !== "ok") return null;
+    return buildEnrichedBundle(access);
+  }
+
+  /** 참여자 권한이 필요한 요청의 공통 확인이에요. */
+  function requireParticipant(response, outingId, request) {
+    const access = store.resolveAccess(outingId, credentials(request));
+    if (access.status === "not_found") {
+      sendError(response, "not_found");
+      return null;
+    }
+    if (access.status !== "ok" || !access.viewer) {
+      sendError(response, "not_participant");
+      return null;
+    }
+    return access;
+  }
+
+  async function getOuting(request, response, outingId, url) {
+    const access = store.resolveAccess(outingId, {
+      ...credentials(request),
+      inviteCode: url.searchParams.get("invite") ?? "",
     });
-    if (bundle.status === "not_found") {
-      json(response, 404, { error: "모임을 찾지 못했어요." });
-      return;
-    }
-    if (bundle.status !== "ok" || !bundle.viewer) {
-      json(response, 403, { error: "참여자 권한이 필요해요." });
-      return;
-    }
-    if (!openAiApiKey) {
-      json(response, 503, {
-        error: "AI 브리핑을 준비하고 있어요. 잠시 후 다시 시도해 주세요.",
-      });
-      return;
+    if (access.status === "not_found") return sendError(response, "not_found");
+    if (access.status === "forbidden") {
+      return sendError(response, "invite_required");
     }
 
-    const enriched = await enrichBundle(bundle);
-    const { stateHash } = await getBriefingState(enriched);
+    const nowMs = now();
+    const ifNoneMatch = header(request, "if-none-match");
+    if (ifNoneMatch) {
+      const cached = weatherCacheFromRow(access.outingRow);
+      const weatherStamp = getCachedWeatherStamp({
+        weatherStatus: getWeatherWindowStatus(
+          access.outingRow.starts_at,
+          nowMs,
+        ),
+        cachePayload: cached?.payload ?? null,
+        cacheFetchedAt: cached?.fetchedAt ?? null,
+        now: nowMs,
+        enabled: weatherEnabled,
+      });
+      if (weatherStamp != null) {
+        const etag = formatOutingEtag({
+          revision: access.outingRow.revision,
+          weatherStamp,
+          viewerId: access.viewer?.id ?? null,
+        });
+        if (etagMatches(ifNoneMatch, etag)) {
+          return empty(response, 304, {
+            etag,
+            "cache-control": OUTING_CACHE_CONTROL,
+          });
+        }
+      }
+    }
+
+    const { bundle, etag } = await buildEnrichedBundle(access, nowMs);
+    json(response, 200, bundle, {
+      etag,
+      "cache-control": OUTING_CACHE_CONTROL,
+    });
+  }
+
+  async function createOuting(request, response) {
+    const body = asObject(await readBody(request));
+    const parsed = parseOutingInput(body, { partial: false, now: now() });
+    if (parsed.error) return sendError(response, parsed.error);
+    const items = resolveItemSelection(body.itemKeys, body.customItems);
+    if (items.length === 0) return sendError(response, "no_items");
+
+    const limited = await consumeLimits(request, [
+      identityLimit(RATE_LIMITS.createOuting),
+    ]);
+    if (limited) return sendError(response, limited);
+
+    const userKey = anonymousUserKey(request);
+    const created = store.createOuting({
+      values: parsed.values,
+      items,
+      anonymousUserKey: userKey,
+      avatarKey: body.avatarKey,
+    });
+    const loaded = await loadEnrichedBundle(created.outingId, {
+      token: created.session.token,
+      anonymousUserKey: userKey,
+    });
+    json(response, 201, {
+      session: created.session,
+      outing: loaded?.bundle ?? null,
+    });
+  }
+
+  async function joinOuting(request, response, outingId) {
+    const body = asObject(await readBody(request));
+    const name = cleanText(body.name, 10);
+    const inviteCode = cleanText(body.inviteCode, 64);
+    if (!name || !inviteCode) return sendError(response, "invalid_name");
+
+    const limited = await consumeLimits(request, [
+      identityLimit(RATE_LIMITS.joinOuting),
+    ]);
+    if (limited) return sendError(response, limited);
+
+    const userKey = anonymousUserKey(request);
+    const result = store.joinOuting({
+      outingId,
+      inviteCode,
+      name,
+      anonymousUserKey: userKey,
+      avatarKey: body.avatarKey,
+      claimItemId:
+        typeof body.claimItemId === "string" && body.claimItemId.length <= 64
+          ? body.claimItemId
+          : "",
+    });
+    if (result.error) return sendError(response, result.error);
+    const loaded = await loadEnrichedBundle(outingId, {
+      token: result.session.token,
+      anonymousUserKey: userKey,
+    });
+    json(response, result.created ? 201 : 200, {
+      session: result.session,
+      outing: loaded?.bundle ?? null,
+      claimResult: result.claimResult,
+    });
+  }
+
+  async function updateOuting(request, response, outingId) {
+    const access = requireParticipant(response, outingId, request);
+    if (!access) return;
+    if (!access.isCreator) return sendError(response, "not_creator");
+    const body = asObject(await readBody(request));
+    const parsed = parseOutingInput(body, { partial: true, now: now() });
+    if (parsed.error) return sendError(response, parsed.error);
+    store.updateOuting({
+      outingRow: access.outingRow,
+      viewer: access.viewer,
+      values: parsed.values,
+    });
+    const loaded = await loadEnrichedBundle(outingId, credentials(request));
+    json(response, 200, { outing: loaded?.bundle ?? null });
+  }
+
+  function resetInviteCode(request, response, outingId) {
+    const access = requireParticipant(response, outingId, request);
+    if (!access) return;
+    if (!access.isCreator) return sendError(response, "not_creator_invite");
+    const result = store.resetInviteCode(outingId);
+    json(response, 200, { inviteCode: result.inviteCode });
+  }
+
+  function deleteOuting(request, response, outingId) {
+    const access = store.resolveAccess(outingId, credentials(request));
+    if (access.status === "not_found") return sendError(response, "not_found");
+    if (access.status !== "ok" || !access.isCreator) {
+      return sendError(response, "not_creator_delete");
+    }
+    const result = store.deleteOuting(outingId);
+    if (result.error) return sendError(response, result.error);
+    json(response, 200, { ok: true });
+  }
+
+  async function getAiBriefing(request, response, outingId) {
+    const access = requireParticipant(response, outingId, request);
+    if (!access) return;
+    const nowMs = now();
+    if (isPastOuting(access.outingRow.starts_at, nowMs)) {
+      return sendError(response, "outing_past");
+    }
+    if (!openAiApiKey) return sendError(response, "ai_unavailable");
+
+    const { bundle } = await buildEnrichedBundle(access, nowMs);
+    const { stateHash } = await getBriefingState(bundle);
     const cacheKey = `${outingId}:${stateHash}`;
-    const now = Date.now();
     const cached = aiBriefingCache.get(cacheKey);
-    if (cached && cached.meta.expiresAt > now) {
-      json(response, 200, {
+    if (cached && cached.meta.expiresAt > nowMs) {
+      return json(response, 200, {
         briefing: cached.briefing,
         meta: { ...cached.meta, cached: true },
       });
-      return;
     }
 
-    const usage = (aiBriefingUsage.get(outingId) ?? []).filter(
-      (createdAt) => createdAt > now - 24 * 60 * 60 * 1000,
-    );
-    aiBriefingUsage.set(outingId, usage);
-    if (usage.length >= AI_BRIEFING_DAILY_LIMIT) {
-      json(response, 429, {
-        error: "오늘 AI 브리핑을 충분히 만들었어요. 내일 다시 만나요.",
-      });
-      return;
-    }
+    // OpenAI를 부르기 전에 사용량을 올려 실패한 시도도 집계해요.
+    const limited = await consumeLimits(request, [
+      {
+        bucket: outingRateBucket(RATE_LIMITS.aiBriefing.bucket, outingId),
+        limit: AI_BRIEFING_DAILY_LIMIT,
+        error: "ai_daily_limit",
+      },
+      identityLimit(RATE_LIMITS.aiBriefing),
+    ]);
+    if (limited) return sendError(response, limited);
 
     try {
       const generated = await generateAiBriefing({
-        bundle: enriched,
+        bundle,
         apiKey: openAiApiKey,
         fetchImpl,
         model: aiModel,
@@ -198,7 +494,6 @@ export function createApiServer({
         },
       };
       aiBriefingCache.set(cacheKey, result);
-      aiBriefingUsage.set(outingId, [...usage, generatedAt]);
       json(response, 201, result);
     } catch (error) {
       console.error("ai_briefing_generation_failed", {
@@ -207,124 +502,103 @@ export function createApiServer({
         status: error?.status ?? null,
         apiCode: error?.apiCode ?? null,
       });
-      json(response, 502, {
-        error:
-          "AI 브리핑을 만들지 못했어요. 잠시 후 다시 시도해 주세요.",
-      });
+      sendError(response, "ai_failed");
     }
-  }
-
-  function outingPlace(outing) {
-    return (
-      getPlace(outing.placeId) ?? {
-        id: outing.placeId,
-        name: outing.placeName,
-        latitude: outing.latitude,
-        longitude: outing.longitude,
-        city: outing.placeName.split(",").at(-1)?.trim() || "대한민국",
-        crowdBaseline: 45,
-      }
-    );
   }
 
   async function getPlaceIntelligence(request, response, outingId) {
-    const bundle = store.getOutingBundle(outingId, {
-      token: bearerToken(request),
-      anonymousUserKey: anonymousUserKey(request),
-    });
-    if (bundle.status === "not_found") {
-      json(response, 404, { error: "모임을 찾지 못했어요." });
-      return;
-    }
-    if (bundle.status !== "ok" || !bundle.viewer) {
-      json(response, 403, { error: "참여자 권한이 필요해요." });
-      return;
+    const access = requireParticipant(response, outingId, request);
+    if (!access) return;
+    const nowMs = now();
+    const outing = mapOutingRow(access.outingRow, nowMs);
+    const place = outingPlace(outing);
+
+    if (!isOutingToday(outing.startsAt, nowMs)) {
+      // 오늘이 아닌 모임은 모임 시각 기준으로 혼잡도를 예상해요.
+      const crowd = estimateCrowd(place, {
+        targetTime: new Date(startsAtMs(outing.startsAt)),
+        basis: "outing",
+        computedAt: new Date(nowMs),
+      });
+      return json(response, 200, {
+        crowd,
+        meta: { cached: false, expiresAt: nowMs + CROWD_CACHE_TTL_MS },
+      });
     }
 
-    const place = outingPlace(bundle.outing);
-    const now = Date.now();
     const cached = crowdCache.get(place.id);
-    if (cached && cached.expiresAt > now) {
-      json(response, 200, {
-        crowd: cached.crowd,
+    if (cached && cached.expiresAt > nowMs) {
+      return json(response, 200, {
+        crowd: normalizeCrowdResponse(cached.crowd, {
+          basis: "now",
+          targetTime: nowMs,
+          now: nowMs,
+        }),
         meta: { cached: true, expiresAt: cached.expiresAt },
       });
-      return;
     }
 
     const crowd = await getCurrentCrowdIntelligence({
       place,
       apiKey: seoulOpenDataApiKey,
       fetchImpl,
+      now: new Date(nowMs),
     });
     const cacheTtlMs =
       crowd.mode === "estimate" && crowd.liveSupported
         ? 30 * 1000
-        : 5 * 60 * 1000;
-    const expiresAt = now + cacheTtlMs;
+        : CROWD_CACHE_TTL_MS;
+    const expiresAt = nowMs + cacheTtlMs;
     crowdCache.set(place.id, { crowd, expiresAt });
     json(response, 200, {
-      crowd,
+      crowd: normalizeCrowdResponse(crowd, { basis: "now", now: nowMs }),
       meta: { cached: false, expiresAt },
     });
   }
 
   async function getSummerEvents(request, response, outingId) {
-    const bundle = store.getOutingBundle(outingId, {
-      token: bearerToken(request),
-      anonymousUserKey: anonymousUserKey(request),
-    });
-    if (bundle.status === "not_found") {
-      json(response, 404, { error: "모임을 찾지 못했어요." });
-      return;
+    const access = requireParticipant(response, outingId, request);
+    if (!access) return;
+    const nowMs = now();
+    if (isPastOuting(access.outingRow.starts_at, nowMs)) {
+      return sendError(response, "outing_past");
     }
-    if (bundle.status !== "ok" || !bundle.viewer) {
-      json(response, 403, { error: "참여자 권한이 필요해요." });
-      return;
-    }
-    if (!openAiApiKey) {
-      json(response, 503, {
-        error: "AI 행사 검색을 준비하고 있어요. 잠시 후 다시 시도해 주세요.",
-      });
-      return;
-    }
+    if (!openAiApiKey) return sendError(response, "events_unavailable");
 
-    const place = outingPlace(bundle.outing);
-    const now = Date.now();
+    const outing = mapOutingRow(access.outingRow, nowMs);
+    const place = outingPlace(outing);
     const { searchKey } = await getSummerEventSearchState({
-      outing: bundle.outing,
+      outing,
       place,
-      now: new Date(now),
+      now: new Date(nowMs),
     });
     const cacheKey = `${outingId}:${searchKey}`;
     const cached = summerEventCache.get(cacheKey);
-    if (cached && cached.meta.expiresAt > now) {
-      json(response, 200, {
+    if (cached && cached.meta.expiresAt > nowMs) {
+      return json(response, 200, {
         events: cached.events,
         meta: { ...cached.meta, cached: true },
       });
-      return;
     }
 
-    const usage = (summerEventUsage.get(outingId) ?? []).filter(
-      (createdAt) => createdAt > now - 24 * 60 * 60 * 1000,
-    );
-    summerEventUsage.set(outingId, usage);
-    if (usage.length >= SUMMER_EVENT_DAILY_LIMIT) {
-      json(response, 429, {
-        error: "오늘 행사 검색을 충분히 했어요. 내일 다시 찾아볼게요.",
-      });
-      return;
-    }
+    const limited = await consumeLimits(request, [
+      {
+        bucket: outingRateBucket(RATE_LIMITS.summerEvents.bucket, outingId),
+        limit: SUMMER_EVENT_DAILY_LIMIT,
+        error: "events_daily_limit",
+      },
+      identityLimit(RATE_LIMITS.summerEvents),
+    ]);
+    if (limited) return sendError(response, limited);
 
     try {
       const generated = await generateSummerEvents({
-        outing: bundle.outing,
+        outing,
         place,
         apiKey: openAiApiKey,
         fetchImpl,
         model: eventModel,
-        now: new Date(now),
+        now: new Date(nowMs),
       });
       const generatedAt = Date.now();
       const result = {
@@ -339,7 +613,6 @@ export function createApiServer({
         },
       };
       summerEventCache.set(cacheKey, result);
-      summerEventUsage.set(outingId, [...usage, generatedAt]);
       json(response, 201, result);
     } catch (error) {
       console.error("summer_event_search_failed", {
@@ -348,15 +621,259 @@ export function createApiServer({
         status: error?.status ?? null,
         apiCode: error?.apiCode ?? null,
       });
-      json(response, 502, {
-        error: "행사 정보를 확인하지 못했어요. 잠시 후 다시 시도해 주세요.",
-      });
+      sendError(response, "events_failed");
     }
   }
 
+  async function getPackingRecommendations(response, url) {
+    const place =
+      getPlace(url.searchParams.get("placeId")) ??
+      getCustomPlace({
+        name: url.searchParams.get("placeName"),
+        latitude: url.searchParams.get("latitude"),
+        longitude: url.searchParams.get("longitude"),
+      });
+    const startsAt = normalizeStartsAt(url.searchParams.get("startsAt"));
+    const activityType = getActivityType(url.searchParams.get("activityType"));
+    const expectedPeople = normalizeExpectedPeople(
+      url.searchParams.get("expectedPeople"),
+    );
+    if (!place || !startsAt) return sendError(response, "invalid_preview");
+
+    let weatherStatus = getWeatherWindowStatus(startsAt, now());
+    let weather = null;
+    if (weatherStatus === "ok") {
+      weather = weatherEnabled
+        ? await getForecastWeather(
+            {
+              id: "preview",
+              startsAt,
+              latitude: place.latitude,
+              longitude: place.longitude,
+            },
+            fetchImpl,
+          )
+        : null;
+      weatherStatus = weather ? "ok" : "unavailable";
+    }
+    json(response, 200, {
+      activityType,
+      expectedPeople,
+      weather,
+      weatherStatus,
+      recommendations: getSmartPackingRecommendations({
+        activityType,
+        place,
+        weather,
+        expectedPeople,
+      }),
+    });
+  }
+
+  async function getCrowdHighlights(response) {
+    const nowMs = now();
+    const cached = crowdCache.get("crowd-highlights");
+    if (cached && cached.expiresAt > nowMs) {
+      return json(response, 200, cached.payload);
+    }
+    const places = await Promise.all(
+      PLACES.filter((place) => place.seoulCrowdArea).map(async (place) => ({
+        id: place.id,
+        name: place.name,
+        latitude: place.latitude,
+        longitude: place.longitude,
+        city: place.city,
+        currentCrowd: await getCurrentCrowdIntelligence({
+          place,
+          apiKey: seoulOpenDataApiKey,
+          fetchImpl,
+          now: new Date(nowMs),
+        }),
+      })),
+    );
+    const payload = { places, meta: { generatedAt: nowMs } };
+    crowdCache.set("crowd-highlights", {
+      payload,
+      expiresAt: nowMs + CROWD_CACHE_TTL_MS,
+    });
+    json(response, 200, payload);
+  }
+
+  async function getWeatherHighlights(response) {
+    const cacheKey = `today:${getKoreaDateKey(now())}`;
+    const cached = regionalWeatherCache.get(cacheKey);
+    if (cached && now() - cached.generatedAt < WEATHER_HIGHLIGHTS_TTL_MS) {
+      return json(response, 200, {
+        regions: cached.regions,
+        meta: { ...cached.meta, cached: true },
+      });
+    }
+    const result = weatherEnabled
+      ? await getRegionalWeatherHighlights(fetchImpl)
+      : { regions: [], meta: { generatedAt: Date.now(), date: "" } };
+    if (result.regions.length > 0) {
+      regionalWeatherCache.set(cacheKey, {
+        ...result,
+        generatedAt: now(),
+      });
+    }
+    json(response, 200, {
+      ...result,
+      meta: { ...result.meta, cached: false },
+    });
+  }
+
+  async function getLocationWeather(response, url) {
+    const latitude = Number(url.searchParams.get("latitude"));
+    const longitude = Number(url.searchParams.get("longitude"));
+    if (
+      !Number.isFinite(latitude) ||
+      !Number.isFinite(longitude) ||
+      latitude < 32 ||
+      latitude > 39 ||
+      longitude < 124 ||
+      longitude > 132
+    ) {
+      return sendError(response, "invalid_location");
+    }
+    const date = getKoreaDateKey(now());
+    const weather = weatherEnabled
+      ? await getForecastWeather(
+          {
+            id: `location-${latitude.toFixed(2)}-${longitude.toFixed(2)}`,
+            startsAt: `${date}T12:00:00+09:00`,
+            latitude: Number(latitude.toFixed(2)),
+            longitude: Number(longitude.toFixed(2)),
+          },
+          fetchImpl,
+        )
+      : null;
+    json(response, 200, {
+      weather,
+      meta: { generatedAt: Date.now(), locationBased: true },
+    });
+  }
+
+  async function addItem(request, response, outingId) {
+    const access = requireParticipant(response, outingId, request);
+    if (!access) return;
+    const body = asObject(await readBody(request));
+    const option =
+      typeof body.optionKey === "string" ? getItemOption(body.optionKey) : null;
+    const customLabel = normalizeCustomLabel(body.label);
+    const item =
+      option ??
+      (customLabel
+        ? { key: null, label: customLabel, visual: "asset:item-custom-3d.png" }
+        : null);
+    if (!item) return sendError(response, "invalid_item");
+    const result = store.addItem({ outingId, viewer: access.viewer, item });
+    if (result.error) return sendError(response, result.error);
+    json(response, 201, { ok: true, itemId: result.itemId });
+  }
+
+  async function updateItem(request, response, outingId, itemId) {
+    const access = requireParticipant(response, outingId, request);
+    if (!access) return;
+    const body = asObject(await readBody(request));
+    const result = store.updateItem({
+      outingId,
+      itemId,
+      viewer: access.viewer,
+      isCreator: access.isCreator,
+      done: typeof body.done === "boolean" ? body.done : undefined,
+      ownerId:
+        body.ownerId === null || typeof body.ownerId === "string"
+          ? body.ownerId
+          : undefined,
+    });
+    if (result.error) return sendError(response, result.error, result);
+    json(response, 200, { ok: true });
+  }
+
+  function deleteItem(request, response, outingId, itemId) {
+    const access = requireParticipant(response, outingId, request);
+    if (!access) return;
+    const result = store.deleteItem({
+      outingId,
+      itemId,
+      viewer: access.viewer,
+      isCreator: access.isCreator,
+    });
+    if (result.error) return sendError(response, result.error);
+    json(response, 200, { ok: true });
+  }
+
+  function completeMine(request, response, outingId) {
+    const access = requireParticipant(response, outingId, request);
+    if (!access) return;
+    const result = store.completeMyItems({ outingId, viewer: access.viewer });
+    json(response, 200, { ok: true, completed: result.completed });
+  }
+
+  function randomize(request, response, outingId) {
+    const access = requireParticipant(response, outingId, request);
+    if (!access) return;
+    const result = store.randomizeUnassigned({
+      outingId,
+      viewer: access.viewer,
+    });
+    if (result.error) return sendError(response, result.error);
+    json(response, 200, { ok: true, assigned: result.assigned });
+  }
+
+  async function toggleReaction(request, response, outingId, eventId) {
+    const access = requireParticipant(response, outingId, request);
+    if (!access) return;
+    const body = asObject(await readBody(request));
+    const result = store.toggleEventReaction({
+      outingId,
+      eventId,
+      viewer: access.viewer,
+      reactionType: body.reactionType,
+    });
+    if (result.error) return sendError(response, result.error);
+    json(response, 200, { ok: true, reaction: result.reaction });
+  }
+
+  async function getOutingSummaries(request, response) {
+    const sessions = parseSummarySessions(await readBody(request));
+    json(response, 200, {
+      summaries: store.getOutingSummaries(
+        sessions,
+        anonymousUserKey(request),
+        now(),
+      ),
+    });
+  }
+
+  const routes = [
+    ["PATCH", /^\/api\/outings\/([^/]+)$/, updateOuting],
+    ["DELETE", /^\/api\/outings\/([^/]+)$/, deleteOuting],
+    ["POST", /^\/api\/outings\/([^/]+)\/join$/, joinOuting],
+    ["POST", /^\/api\/outings\/([^/]+)\/invite-code$/, resetInviteCode],
+    ["POST", /^\/api\/outings\/([^/]+)\/ai-briefing$/, getAiBriefing],
+    [
+      "GET",
+      /^\/api\/outings\/([^/]+)\/place-intelligence$/,
+      getPlaceIntelligence,
+    ],
+    ["POST", /^\/api\/outings\/([^/]+)\/summer-events$/, getSummerEvents],
+    ["POST", /^\/api\/outings\/([^/]+)\/items$/, addItem],
+    ["PATCH", /^\/api\/outings\/([^/]+)\/items\/([^/]+)$/, updateItem],
+    ["DELETE", /^\/api\/outings\/([^/]+)\/items\/([^/]+)$/, deleteItem],
+    ["POST", /^\/api\/outings\/([^/]+)\/complete-mine$/, completeMine],
+    ["POST", /^\/api\/outings\/([^/]+)\/randomize$/, randomize],
+    [
+      "POST",
+      /^\/api\/outings\/([^/]+)\/events\/([^/]+)\/reaction$/,
+      toggleReaction,
+    ],
+  ];
+
   const server = createServer(async (request, response) => {
     if (request.method === "OPTIONS") {
-      json(response, 204, {});
+      empty(response, 204);
       return;
     }
 
@@ -370,6 +887,7 @@ export function createApiServer({
       }
 
       if (request.method === "GET" && path === "/api/places") {
+        const nowDate = new Date(now());
         json(response, 200, {
           places: PLACES.map((place) => ({
             id: place.id,
@@ -383,99 +901,31 @@ export function createApiServer({
             summerTip: place.summerTip,
             imageUrl: place.imageUrl,
             officialUrl: place.officialUrl,
-            currentCrowd: estimateCurrentCrowd(place),
+            currentCrowd: estimateCurrentCrowd(place, nowDate),
           })),
         });
         return;
       }
 
       if (request.method === "GET" && path === "/api/crowd-highlights") {
-        const places = await Promise.all(
-          PLACES.filter((place) => place.seoulCrowdArea).map(async (place) => ({
-            id: place.id,
-            name: place.name,
-            latitude: place.latitude,
-            longitude: place.longitude,
-            city: place.city,
-            currentCrowd: await getCurrentCrowdIntelligence({
-              place,
-              apiKey: seoulOpenDataApiKey,
-              fetchImpl,
-            }),
-          })),
-        );
-        json(response, 200, {
-          places,
-          meta: { generatedAt: Date.now() },
-        });
+        await getCrowdHighlights(response);
         return;
       }
 
       if (request.method === "GET" && path === "/api/weather-highlights") {
-        const cached = regionalWeatherCache.get("today");
-        if (cached && Date.now() - cached.generatedAt < 30 * 60 * 1000) {
-          json(response, 200, {
-            regions: cached.regions,
-            meta: {
-              ...cached.meta,
-              cached: true,
-            },
-          });
-          return;
-        }
-        const result = weatherEnabled
-          ? await getRegionalWeatherHighlights(fetchImpl)
-          : { regions: [], meta: { generatedAt: Date.now(), date: "" } };
-        regionalWeatherCache.set("today", result);
-        json(response, 200, {
-          ...result,
-          meta: {
-            ...result.meta,
-            cached: false,
-          },
-        });
+        await getWeatherHighlights(response);
         return;
       }
 
       if (request.method === "GET" && path === "/api/location-weather") {
-        const latitude = Number(url.searchParams.get("latitude"));
-        const longitude = Number(url.searchParams.get("longitude"));
-        if (
-          !Number.isFinite(latitude) ||
-          !Number.isFinite(longitude) ||
-          latitude < 32 ||
-          latitude > 39 ||
-          longitude < 124 ||
-          longitude > 132
-        ) {
-          json(response, 400, { error: "위치 정보가 올바르지 않아요." });
-          return;
-        }
-        const date = getKoreaDateKey();
-        const weather = weatherEnabled
-          ? await getForecastWeather(
-              {
-                id: `location-${latitude.toFixed(3)}-${longitude.toFixed(3)}`,
-                startsAt: `${date}T12:00:00+09:00`,
-                latitude,
-                longitude,
-              },
-              fetchImpl,
-            )
-          : null;
-        json(response, 200, {
-          weather,
-          meta: { generatedAt: Date.now(), locationBased: true },
-        });
+        await getLocationWeather(response, url);
         return;
       }
 
       if (request.method === "GET" && path === "/api/place-search") {
-        const places = await searchPlaces(
-          url.searchParams.get("q"),
-          fetchImpl,
-        );
-        json(response, 200, { places });
+        json(response, 200, {
+          places: await searchPlaces(url.searchParams.get("q"), fetchImpl),
+        });
         return;
       }
 
@@ -492,413 +942,61 @@ export function createApiServer({
         request.method === "GET" &&
         path === "/api/packing-recommendations"
       ) {
-        const place =
-          getPlace(url.searchParams.get("placeId")) ??
-          getCustomPlace({
-            name: url.searchParams.get("placeName"),
-            latitude: url.searchParams.get("latitude"),
-            longitude: url.searchParams.get("longitude"),
-          });
-        const startsAt = url.searchParams.get("startsAt");
-        const activityType = getActivityType(
-          url.searchParams.get("activityType"),
-        );
-        const expectedPeople = normalizeExpectedPeople(
-          url.searchParams.get("expectedPeople"),
-        );
-        if (!place || !validDate(startsAt)) {
-          json(response, 400, {
-            error: "활동, 날짜, 장소를 확인해 주세요.",
-          });
-          return;
-        }
-        const previewOuting = {
-          id: "preview",
-          startsAt,
-          latitude: place.latitude,
-          longitude: place.longitude,
-        };
-        const weather = weatherEnabled
-          ? await getForecastWeather(previewOuting, fetchImpl)
-          : null;
-        json(response, 200, {
-          activityType,
-          expectedPeople,
-          weather,
-          recommendations: getSmartPackingRecommendations({
-            activityType,
-            place,
-            weather,
-            expectedPeople,
-          }),
-        });
+        await getPackingRecommendations(response, url);
         return;
       }
 
       if (request.method === "POST" && path === "/api/outings") {
-        const body = await readBody(request);
-        const title = text(body.title, 32);
-        const creatorName = text(body.creatorName, 10);
-        const place =
-          getPlace(body.placeId) ?? getCustomPlace(body.customPlace);
-        const activityType = getActivityType(body.activityType);
-        const expectedPeople = normalizeExpectedPeople(body.expectedPeople);
-        if (
-          title.length < 2 ||
-          creatorName.length < 1 ||
-          !place ||
-          !validDate(body.startsAt)
-        ) {
-          json(response, 400, {
-            error: "모임 이름, 날짜, 장소, 닉네임을 확인해 주세요.",
-          });
-          return;
-        }
-
-        const items = resolveItemSelection(body.itemKeys, body.customItems);
-        if (items.length === 0) {
-          json(response, 400, {
-            error: "준비물을 한 개 이상 골라주세요.",
-          });
-          return;
-        }
-
-        const created = store.createOuting({
-          title,
-          place,
-          startsAt: body.startsAt,
-          activityType,
-          expectedPeople,
-          creatorName,
-          items,
-          anonymousUserKey: anonymousUserKey(request),
-        });
-        const bundle = store.getOutingBundle(created.outingId, {
-          token: created.session.token,
-          anonymousUserKey: anonymousUserKey(request),
-        });
-        const enriched = await enrichBundle(bundle);
-
-        json(response, 201, {
-          session: created.session,
-          outing: enriched.status === "ok" ? enriched : null,
-        });
+        await createOuting(request, response);
         return;
       }
 
       if (request.method === "GET" && path === "/api/me/outings") {
         const userKey = anonymousUserKey(request);
         if (!userKey) {
-          json(response, 401, {
-            error: "토스 사용자 식별 정보가 필요해요.",
-          });
+          sendError(response, "user_key_required");
           return;
         }
         json(response, 200, {
-          sessions: store.listMySessions(userKey),
+          sessions: store.listMySessions(userKey, now()),
         });
+        return;
+      }
+
+      if (request.method === "POST" && path === "/api/outing-summaries") {
+        await getOutingSummaries(request, response);
         return;
       }
 
       const outingMatch = path.match(/^\/api\/outings\/([^/]+)$/);
-      if (request.method === "DELETE" && outingMatch) {
-        const result = store.deleteOuting({
-          outingId: outingMatch[1],
-          token: bearerToken(request),
-          anonymousUserKey: anonymousUserKey(request),
-        });
-        if (
-          result.status === "forbidden" ||
-          result.status === "not_creator"
-        ) {
-          json(response, 403, {
-            error: "모임을 만든 사람만 삭제할 수 있어요.",
-          });
-          return;
-        }
-        if (result.status === "not_found") {
-          json(response, 404, { error: "모임을 찾지 못했어요." });
-          return;
-        }
-        json(response, 200, { ok: true });
-        return;
-      }
       if (request.method === "GET" && outingMatch) {
-        const outingId = outingMatch[1];
-        const bundle = store.getOutingBundle(outingId, {
-          token: bearerToken(request),
-          anonymousUserKey: anonymousUserKey(request),
-          inviteCode: url.searchParams.get("invite") ?? "",
-        });
-        if (bundle.status === "not_found") {
-          json(response, 404, { error: "모임을 찾지 못했어요." });
-          return;
-        }
-        if (bundle.status === "forbidden") {
-          json(response, 403, { error: "초대 링크가 필요해요." });
-          return;
-        }
-        json(response, 200, await enrichBundle(bundle));
+        await getOuting(request, response, outingMatch[1], url);
         return;
       }
 
-      const joinMatch = path.match(/^\/api\/outings\/([^/]+)\/join$/);
-      if (request.method === "POST" && joinMatch) {
-        const body = await readBody(request);
-        const name = text(body.name, 10);
-        const inviteCode = text(body.inviteCode, 64);
-        if (!name || !inviteCode) {
-          json(response, 400, { error: "닉네임을 입력해 주세요." });
-          return;
-        }
-        const session = store.joinOuting({
-          outingId: joinMatch[1],
-          inviteCode,
-          name,
-          anonymousUserKey: anonymousUserKey(request),
-        });
-        if (!session) {
-          json(response, 403, { error: "유효하지 않은 초대 링크예요." });
-          return;
-        }
-        const bundle = store.getOutingBundle(joinMatch[1], {
-          token: session.token,
-          anonymousUserKey: anonymousUserKey(request),
-        });
-        const enriched = await enrichBundle(bundle);
-        json(response, 201, {
-          session,
-          outing: enriched.status === "ok" ? enriched : null,
-        });
+      for (const [method, pattern, handler] of routes) {
+        if (request.method !== method) continue;
+        const match = path.match(pattern);
+        if (!match) continue;
+        await handler(request, response, ...match.slice(1));
         return;
       }
 
-      const aiBriefingMatch = path.match(
-        /^\/api\/outings\/([^/]+)\/ai-briefing$/,
-      );
-      if (request.method === "POST" && aiBriefingMatch) {
-        await getAiBriefing(request, response, aiBriefingMatch[1]);
-        return;
-      }
-
-      const placeIntelligenceMatch = path.match(
-        /^\/api\/outings\/([^/]+)\/place-intelligence$/,
-      );
-      if (request.method === "GET" && placeIntelligenceMatch) {
-        await getPlaceIntelligence(
-          request,
-          response,
-          placeIntelligenceMatch[1],
-        );
-        return;
-      }
-
-      const summerEventsMatch = path.match(
-        /^\/api\/outings\/([^/]+)\/summer-events$/,
-      );
-      if (request.method === "POST" && summerEventsMatch) {
-        await getSummerEvents(request, response, summerEventsMatch[1]);
-        return;
-      }
-
-      const itemMatch = path.match(
-        /^\/api\/outings\/([^/]+)\/items\/([^/]+)$/,
-      );
-      if (request.method === "PATCH" && itemMatch) {
-        const body = await readBody(request);
-        const result = store.updateItem({
-          outingId: itemMatch[1],
-          itemId: itemMatch[2],
-          token: bearerToken(request),
-          anonymousUserKey: anonymousUserKey(request),
-          done: typeof body.done === "boolean" ? body.done : undefined,
-          ownerId:
-            body.ownerId === null || typeof body.ownerId === "string"
-              ? body.ownerId
-              : undefined,
-        });
-        if (result.status === "forbidden") {
-          json(response, 403, { error: "참여자 권한이 필요해요." });
-          return;
-        }
-        if (result.status !== "ok") {
-          json(response, 404, { error: "준비물을 변경하지 못했어요." });
-          return;
-        }
-        json(response, 200, { ok: true });
-        return;
-      }
-
-      const itemCollectionMatch = path.match(
-        /^\/api\/outings\/([^/]+)\/items$/,
-      );
-      if (request.method === "POST" && itemCollectionMatch) {
-        const body = await readBody(request);
-        const option =
-          typeof body.optionKey === "string"
-            ? getItemOption(body.optionKey)
-            : null;
-        const customLabel = normalizeCustomLabel(body.label);
-        const item =
-          option ??
-          (customLabel
-            ? {
-                key: null,
-                label: customLabel,
-                visual: "asset:item-custom-3d.png",
-              }
-            : null);
-        if (!item) {
-          json(response, 400, { error: "추가할 준비물을 확인해 주세요." });
-          return;
-        }
-        const result = store.addItem({
-          outingId: itemCollectionMatch[1],
-          token: bearerToken(request),
-          anonymousUserKey: anonymousUserKey(request),
-          item,
-        });
-        if (result.status === "forbidden") {
-          json(response, 403, { error: "참여자 권한이 필요해요." });
-          return;
-        }
-        if (result.status === "duplicate") {
-          json(response, 409, { error: "이미 목록에 있는 준비물이에요." });
-          return;
-        }
-        if (result.status === "max_items") {
-          json(response, 409, {
-            error: `준비물은 최대 ${MAX_ITEMS}개까지 추가할 수 있어요.`,
-          });
-          return;
-        }
-        json(response, 201, { ok: true, itemId: result.itemId });
-        return;
-      }
-
-      if (request.method === "DELETE" && itemMatch) {
-        const result = store.deleteItem({
-          outingId: itemMatch[1],
-          itemId: itemMatch[2],
-          token: bearerToken(request),
-          anonymousUserKey: anonymousUserKey(request),
-        });
-        if (result.status === "forbidden") {
-          json(response, 403, { error: "참여자 권한이 필요해요." });
-          return;
-        }
-        if (result.status === "last_item") {
-          json(response, 409, {
-            error: "준비물은 한 개 이상 남겨주세요.",
-          });
-          return;
-        }
-        if (result.status !== "ok") {
-          json(response, 404, { error: "준비물을 찾지 못했어요." });
-          return;
-        }
-        json(response, 200, { ok: true });
-        return;
-      }
-
-      const completeMatch = path.match(
-        /^\/api\/outings\/([^/]+)\/complete-mine$/,
-      );
-      if (request.method === "POST" && completeMatch) {
-        const result = store.completeMyItems({
-          outingId: completeMatch[1],
-          token: bearerToken(request),
-          anonymousUserKey: anonymousUserKey(request),
-        });
-        if (result.status !== "ok") {
-          json(response, 403, { error: "참여자 권한이 필요해요." });
-          return;
-        }
-        json(response, 200, {
-          ok: true,
-          completed: result.completed,
-        });
-        return;
-      }
-
-      const randomizeMatch = path.match(
-        /^\/api\/outings\/([^/]+)\/randomize$/,
-      );
-      if (request.method === "POST" && randomizeMatch) {
-        const result = store.randomizeUnassigned({
-          outingId: randomizeMatch[1],
-          token: bearerToken(request),
-          anonymousUserKey: anonymousUserKey(request),
-        });
-        if (result.status === "forbidden") {
-          json(response, 403, { error: "참여자 권한이 필요해요." });
-          return;
-        }
-        if (result.status === "need_participants") {
-          json(response, 409, {
-            error: "친구가 한 명 이상 참여한 뒤 뽑을 수 있어요.",
-          });
-          return;
-        }
-        if (result.status === "nothing_to_assign") {
-          json(response, 409, {
-            error: "모든 준비물의 담당자가 정해졌어요.",
-          });
-          return;
-        }
-        json(response, 200, {
-          ok: true,
-          assigned: result.assigned,
-        });
-        return;
-      }
-
-      const reactionMatch = path.match(
-        /^\/api\/outings\/([^/]+)\/events\/([^/]+)\/reaction$/,
-      );
-      if (request.method === "POST" && reactionMatch) {
-        const body = await readBody(request);
-        const result = store.toggleEventReaction({
-          outingId: reactionMatch[1],
-          eventId: reactionMatch[2],
-          token: bearerToken(request),
-          anonymousUserKey: anonymousUserKey(request),
-          reactionType: body.reactionType,
-        });
-        if (result.status === "forbidden") {
-          json(response, 403, { error: "참여자 권한이 필요해요." });
-          return;
-        }
-        if (result.status === "invalid_reaction") {
-          json(response, 400, { error: "응원 종류를 확인해 주세요." });
-          return;
-        }
-        if (result.status !== "ok") {
-          json(response, 404, { error: "친구 소식을 찾지 못했어요." });
-          return;
-        }
-        json(response, 200, {
-          ok: true,
-          reaction: result.reaction,
-        });
-        return;
-      }
-
-      json(response, 404, { error: "지원하지 않는 요청이에요." });
+      sendError(response, "not_supported");
     } catch (error) {
-      const message =
-        error instanceof SyntaxError
-          ? "요청 데이터 형식이 올바르지 않아요."
-          : "서버에서 처리하지 못했어요.";
-      json(response, error?.message === "body_too_large" ? 413 : 500, {
-        error: message,
-      });
+      if (response.headersSent) {
+        response.end();
+        return;
+      }
+      const { status, body } = errorForException(error);
+      json(response, status, body);
     }
   });
 
   return {
     server,
     close() {
+      if (cleanupTimer) clearInterval(cleanupTimer);
       store.close();
     },
   };

@@ -2,9 +2,25 @@ import assert from "node:assert/strict";
 
 const baseUrl = process.env.WORKER_API_URL ?? "http://127.0.0.1:8790";
 
-async function request(path, options = {}) {
+function futureStartsAt(daysAhead, time = "10:00") {
+  const kstNow = new Date(Date.now() + 9 * 60 * 60 * 1000);
+  const date = new Date(kstNow.getTime() + daysAhead * 24 * 60 * 60 * 1000)
+    .toISOString()
+    .slice(0, 10);
+  return `${date}T${time}:00+09:00`;
+}
+
+async function raw(path, options = {}) {
   const response = await fetch(`${baseUrl}${path}`, options);
-  const body = await response.json();
+  const text = await response.text();
+  return {
+    response,
+    body: text ? JSON.parse(text) : null,
+  };
+}
+
+async function request(path, options = {}) {
+  const { response, body } = await raw(path, options);
   assert.equal(
     response.ok,
     true,
@@ -32,18 +48,40 @@ const created = await request("/api/outings", {
       latitude: 33.49962,
       longitude: 126.53119,
     },
-    startsAt: "2026-08-06T10:00:00+09:00",
+    startsAt: futureStartsAt(5),
     activityType: "trip",
     expectedPeople: 6,
     creatorName: "검증이",
+    avatarKey: "type-planner",
     itemKeys: ["water", "battery", "camera"],
   }),
 });
 assert.equal(created.outing.outing.expectedPeople, 6);
+assert.equal(created.outing.isCreator, true);
+assert.equal(created.outing.maxParticipants, 30);
+assert.equal(created.outing.participants[0].avatarKey, "type-planner");
+assert.match(created.outing.outing.startsAt, /T10:00:00\+09:00$/);
+assert.ok(
+  ["ok", "unavailable"].includes(created.outing.weatherStatus),
+  created.outing.weatherStatus,
+);
 assert.equal(
   created.outing.items.find((item) => item.key === "water").quantityLabel,
   "6명 기준 12병",
 );
+
+const pastDate = await raw("/api/outings", {
+  method: "POST",
+  headers: { "content-type": "application/json" },
+  body: JSON.stringify({
+    title: "지난 날짜 모임",
+    placeId: "seoul-forest",
+    startsAt: futureStartsAt(-2),
+    creatorName: "검증이",
+  }),
+});
+assert.equal(pastDate.response.status, 400);
+assert.equal(pastDate.body.code, "invalid_date");
 
 const recovered = await request("/api/me/outings", {
   headers: { "x-chaengyeosum-user-key": anonymousUserKey },
@@ -56,6 +94,7 @@ assert.equal(
 );
 
 const outingId = created.outing.outing.id;
+const creatorAuth = { authorization: `Bearer ${created.session.token}` };
 const joined = await request(`/api/outings/${outingId}/join`, {
   method: "POST",
   headers: { "content-type": "application/json" },
@@ -65,53 +104,132 @@ const joined = await request(`/api/outings/${outingId}/join`, {
   }),
 });
 assert.equal(joined.outing.participants.length, 2);
+assert.equal(joined.claimResult, "none");
+const friendAuth = { authorization: `Bearer ${joined.session.token}` };
 
 const unassigned = joined.outing.items.find((item) => item.owner == null);
 await request(`/api/outings/${outingId}/items/${unassigned.id}`, {
   method: "PATCH",
-  headers: {
-    authorization: `Bearer ${joined.session.token}`,
-    "content-type": "application/json",
-  },
+  headers: { ...friendAuth, "content-type": "application/json" },
   body: JSON.stringify({
     ownerId: joined.session.participantId,
     done: true,
   }),
 });
 
-const creatorView = await request(`/api/outings/${outingId}`, {
-  headers: { authorization: `Bearer ${created.session.token}` },
+// 다른 사람이 맡은 준비물은 가져갈 수 없어요.
+const creatorsItem = joined.outing.items.find((item) => item.key === "water");
+const conflict = await raw(
+  `/api/outings/${outingId}/items/${creatorsItem.id}`,
+  {
+    method: "PATCH",
+    headers: { ...friendAuth, "content-type": "application/json" },
+    body: JSON.stringify({ ownerId: joined.session.participantId }),
+  },
+);
+assert.equal(conflict.response.status, 409);
+assert.equal(conflict.body.code, "already_claimed");
+assert.match(conflict.body.error, /검증이님이 맡은/);
+
+// ETag: 바뀐 게 없으면 304, 바뀌면 다시 200이에요.
+const etagView = await raw(`/api/outings/${outingId}`, {
+  headers: creatorAuth,
 });
+assert.equal(etagView.response.status, 200);
+const etag = etagView.response.headers.get("etag");
+assert.match(etag ?? "", /^W\/"\d+-\d+-pt_/);
+const notModified = await fetch(`${baseUrl}/api/outings/${outingId}`, {
+  headers: { ...creatorAuth, "if-none-match": etag },
+});
+assert.equal(notModified.status, 304);
+assert.equal(await notModified.text(), "");
+
+const creatorView = etagView.body;
 const event = creatorView.events[0];
 await request(`/api/outings/${outingId}/events/${event.id}/reaction`, {
   method: "POST",
-  headers: {
-    authorization: `Bearer ${created.session.token}`,
-    "content-type": "application/json",
-  },
+  headers: { ...creatorAuth, "content-type": "application/json" },
   body: JSON.stringify({ reactionType: "heart" }),
 });
 
-const reactedView = await request(`/api/outings/${outingId}`, {
-  headers: { authorization: `Bearer ${created.session.token}` },
+const reacted = await raw(`/api/outings/${outingId}`, {
+  headers: { ...creatorAuth, "if-none-match": etag },
 });
+assert.equal(reacted.response.status, 200);
+assert.notEqual(reacted.response.headers.get("etag"), etag);
 assert.equal(
-  reactedView.events.find((item) => item.id === event.id).reactions.heart,
+  reacted.body.events.find((item) => item.id === event.id).reactions.heart,
   1,
 );
 
+// 모임 수정은 만든 사람만 할 수 있어요.
+const deniedPatch = await raw(`/api/outings/${outingId}`, {
+  method: "PATCH",
+  headers: { ...friendAuth, "content-type": "application/json" },
+  body: JSON.stringify({ title: "친구가 바꾼 이름" }),
+});
+assert.equal(deniedPatch.response.status, 403);
+assert.equal(deniedPatch.body.code, "not_creator");
+
+const patched = await request(`/api/outings/${outingId}`, {
+  method: "PATCH",
+  headers: { ...creatorAuth, "content-type": "application/json" },
+  body: JSON.stringify({
+    title: "제주 여름 마무리",
+    expectedPeople: 8,
+    startsAt: futureStartsAt(40, "11:30"),
+  }),
+});
+assert.equal(patched.outing.outing.title, "제주 여름 마무리");
+assert.equal(patched.outing.outing.expectedPeople, 8);
+assert.equal(patched.outing.weatherStatus, "out_of_range");
+assert.equal(patched.outing.weather, null);
+assert.equal(patched.outing.events[0].type, "updated");
+
 await request(`/api/outings/${outingId}/randomize`, {
   method: "POST",
-  headers: { authorization: `Bearer ${created.session.token}` },
+  headers: creatorAuth,
 });
 
 const finalView = await request(`/api/outings/${outingId}`, {
-  headers: { authorization: `Bearer ${created.session.token}` },
+  headers: creatorAuth,
 });
 assert.equal(
   finalView.items.every((item) => item.owner != null),
   true,
 );
+
+const summaries = await request("/api/outing-summaries", {
+  method: "POST",
+  headers: { "content-type": "application/json" },
+  body: JSON.stringify({
+    sessions: [
+      { outingId, token: created.session.token },
+      { outingId: "out_missing", token: "nope" },
+    ],
+  }),
+});
+assert.equal(summaries.summaries.length, 1);
+assert.equal(summaries.summaries[0].outingId, outingId);
+assert.equal(summaries.summaries[0].total, finalView.items.length);
+assert.equal(summaries.summaries[0].canDelete, true);
+assert.equal(summaries.summaries[0].isPast, false);
+
+// 초대 링크를 새로 만들면 예전 링크로는 참여할 수 없어요.
+const reset = await request(`/api/outings/${outingId}/invite-code`, {
+  method: "POST",
+  headers: creatorAuth,
+});
+assert.notEqual(reset.inviteCode, created.outing.outing.inviteCode);
+const staleJoin = await raw(`/api/outings/${outingId}/join`, {
+  method: "POST",
+  headers: { "content-type": "application/json" },
+  body: JSON.stringify({
+    inviteCode: created.outing.outing.inviteCode,
+    name: "늦은친구",
+  }),
+});
+assert.equal(staleJoin.response.status, 403);
 
 console.log(
   JSON.stringify({
@@ -121,5 +239,6 @@ console.log(
     outingId,
     participants: finalView.participants.length,
     items: finalView.items.length,
+    etag,
   }),
 );

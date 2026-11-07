@@ -79,40 +79,85 @@ export function getActivityType(value) {
   return isActivityType(value) ? value : "picnic";
 }
 
-export const MAX_EXPECTED_PEOPLE = 999;
+export const MIN_EXPECTED_PEOPLE = 1;
+export const MAX_EXPECTED_PEOPLE = 50;
+export const DEFAULT_EXPECTED_PEOPLE = 2;
 
-export function normalizeExpectedPeople(value, fallback = 2) {
-  const parsed = Number(value);
+/** 보조 경로(미리보기·저장값)에서는 1~50으로 맞추고, 읽을 수 없으면 2명이에요. */
+export function normalizeExpectedPeople(
+  value,
+  fallback = DEFAULT_EXPECTED_PEOPLE,
+) {
+  const parsed =
+    typeof value === "number" || typeof value === "string"
+      ? Number(value)
+      : Number.NaN;
+  if (typeof value === "string" && value.trim() === "") return fallback;
   if (!Number.isFinite(parsed)) return fallback;
   return Math.min(
     MAX_EXPECTED_PEOPLE,
-    Math.max(1, Math.round(parsed)),
+    Math.max(MIN_EXPECTED_PEOPLE, Math.round(parsed)),
   );
 }
 
+/** 모임 생성·수정 입력은 1~50 정수만 받아요. 아니면 null이에요. */
+export function parseExpectedPeople(value) {
+  if (typeof value === "string" && !/^\s*\d+\s*$/.test(value)) return null;
+  if (typeof value !== "number" && typeof value !== "string") return null;
+  const parsed = Number(value);
+  return Number.isInteger(parsed) &&
+    parsed >= MIN_EXPECTED_PEOPLE &&
+    parsed <= MAX_EXPECTED_PEOPLE
+    ? parsed
+    : null;
+}
+
+/** 수량 계산 인원: 예상 인원과 실제 참여자 수 중 큰 값(최대 50명)이에요. */
+export function getQuantityPeople(expectedPeople, participantCount = 0) {
+  const participants = Number(participantCount);
+  return Math.min(
+    MAX_EXPECTED_PEOPLE,
+    Math.max(
+      normalizeExpectedPeople(expectedPeople),
+      Number.isFinite(participants) ? Math.round(participants) : 0,
+    ),
+  );
+}
+
+const QUANTITY_RULES = {
+  water: (people) => [people * 2, "병"],
+  towel: (people) => [people, "개"],
+  umbrella: (people) => [people, "개"],
+  hat: (people) => [people, "개"],
+  swimwear: (people) => [people, "벌"],
+  "change-clothes": (people) => [people, "벌"],
+  "waterproof-pouch": (people) => [people, "개"],
+  ticket: (people) => [people, "장"],
+  snack: (people) => [people, "개"],
+  mat: (people) => [Math.ceil(people / 3), "개"],
+  sunscreen: (people) => [Math.ceil(people / 4), "개"],
+  battery: (people) => [Math.ceil(people / 2), "개"],
+  fan: (people) => [Math.ceil(people / 2), "개"],
+};
+
 export function getSuggestedQuantity(key, expectedPeople = 2) {
+  if (!getItemOption(key)) {
+    // 직접 추가한 준비물은 인원과 무관하게 하나만 챙기면 돼요.
+    return { quantity: 1, unit: "개", quantityLabel: "1개" };
+  }
   const people = normalizeExpectedPeople(expectedPeople);
-  const quantityByKey = {
-    water: [people * 2, "병"],
-    towel: [people, "개"],
-    umbrella: [people, "개"],
-    hat: [people, "개"],
-    swimwear: [people, "벌"],
-    "change-clothes": [people, "벌"],
-    "waterproof-pouch": [people, "개"],
-    ticket: [people, "장"],
-    snack: [people, "개"],
-    mat: [Math.ceil(people / 3), "개"],
-    sunscreen: [Math.ceil(people / 4), "개"],
-    battery: [Math.ceil(people / 2), "개"],
-    fan: [Math.ceil(people / 2), "개"],
-  };
-  const [quantity, unit] = quantityByKey[key] ?? [1, "개"];
+  const [quantity, unit] = QUANTITY_RULES[key]?.(people) ?? [1, "개"];
   return {
     quantity,
     unit,
     quantityLabel: `${people}명 기준 ${quantity}${unit}`,
   };
+}
+
+const WATER_PLACE_CATEGORIES = new Set(["beach", "valley", "waterpark"]);
+
+export function isWaterPlace(place) {
+  return WATER_PLACE_CATEGORIES.has(place?.category);
 }
 
 export function getSmartPackingRecommendations({
@@ -134,11 +179,9 @@ export function getSmartPackingRecommendations({
     recommend(key, reason);
   }
 
-  if (
-    place?.id === "gwangalli" ||
-    place?.id === "eulwangri" ||
-    activityType === "water-play"
-  ) {
+  // 장소 분류(해변·계곡·워터파크)로 물가를 판단하고, 직접 검색한
+  // 장소는 분류가 없으니 활동 유형으로 판단해요.
+  if (isWaterPlace(place) || activityType === "water-play") {
     recommend("waterproof-pouch", "물가에서 휴대폰 방수");
     recommend("change-clothes", "젖은 옷 교체");
   }

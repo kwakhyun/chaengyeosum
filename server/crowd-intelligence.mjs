@@ -1,3 +1,5 @@
+import { parseDateInput, toKstIsoString } from "./kst-date.mjs";
+
 const SEOUL_CROWD_SOURCE_URL = "https://data.seoul.go.kr/SeoulRtd/";
 const CROWD_LEVELS = {
   relaxed: { label: "여유", score: 25 },
@@ -62,8 +64,60 @@ function placeKind(place) {
   return "general";
 }
 
-export function estimateCurrentCrowd(place, now = new Date()) {
-  const { hour, month, weekend } = kstParts(now);
+const ESTIMATE_SUMMARIES = {
+  now: {
+    very_busy: "지금은 사람이 많이 몰릴 가능성이 높아요.",
+    busy: "지금은 평소보다 붐빌 가능성이 있어요.",
+    normal: "지금은 보통 수준으로 예상돼요.",
+    relaxed: "지금은 비교적 여유로울 가능성이 높아요.",
+  },
+  outing: {
+    very_busy: "모임 시간에는 사람이 많이 몰릴 가능성이 높아요.",
+    busy: "모임 시간에는 평소보다 붐빌 가능성이 있어요.",
+    normal: "모임 시간에는 보통 수준으로 예상돼요.",
+    relaxed: "모임 시간에는 비교적 여유로울 가능성이 높아요.",
+  },
+};
+
+/** 혼잡도 시각을 `+09:00`이 붙은 ISO 8601로 맞춰요. */
+export function normalizeObservedAt(value, fallback = new Date()) {
+  if (typeof value === "string") {
+    const parsed = parseDateInput(value);
+    if (parsed != null) return toKstIsoString(parsed);
+  } else if (value instanceof Date || typeof value === "number") {
+    const normalized = toKstIsoString(value);
+    if (normalized) return normalized;
+  }
+  return toKstIsoString(fallback);
+}
+
+/**
+ * 캐시에 저장된(이전 형식 포함) 혼잡도 객체도 응답 직전에 같은 모양으로
+ * 맞춰요: observedAt/targetTime은 +09:00 ISO, basis는 "now" | "outing".
+ */
+export function normalizeCrowdResponse(
+  crowd,
+  { basis = crowd?.basis ?? "now", targetTime, now = new Date() } = {},
+) {
+  if (!crowd || typeof crowd !== "object") return crowd;
+  return {
+    ...crowd,
+    observedAt: normalizeObservedAt(crowd.observedAt, now),
+    basis,
+    targetTime: normalizeObservedAt(targetTime ?? crowd.targetTime, now),
+  };
+}
+
+/**
+ * 요일·시간·계절·장소 인기도로 혼잡도를 예상해요.
+ * basis "outing"이면 모임 시각(targetTime) 기준 문구를 써요.
+ */
+export function estimateCrowd(
+  place,
+  { targetTime = new Date(), basis = "now", computedAt = new Date() } = {},
+) {
+  const target = targetTime instanceof Date ? targetTime : new Date(targetTime);
+  const { hour, month, weekend } = kstParts(target);
   const kind = placeKind(place);
   let score = Number(place.crowdBaseline ?? 45);
   const reasons = [];
@@ -116,22 +170,18 @@ export function estimateCurrentCrowd(place, now = new Date()) {
   const normalizedScore = Math.round(clamp(score, 14, 94));
   const level = estimateLevel(normalizedScore);
   const state = CROWD_LEVELS[level];
+  const summaryBasis = basis === "outing" ? "outing" : "now";
   return {
     mode: "estimate",
     level,
     label: `${state.label} 예상`,
     score: normalizedScore,
-    summary:
-      level === "very_busy"
-        ? "지금은 사람이 많이 몰릴 가능성이 높아요."
-        : level === "busy"
-          ? "지금은 평소보다 붐빌 가능성이 있어요."
-          : level === "normal"
-            ? "지금은 보통 수준으로 예상돼요."
-            : "지금은 비교적 여유로울 가능성이 높아요.",
+    summary: ESTIMATE_SUMMARIES[summaryBasis][level],
     reasons: reasons.slice(0, 3),
     populationRange: null,
-    observedAt: now.toISOString(),
+    observedAt: normalizeObservedAt(computedAt),
+    basis: summaryBasis,
+    targetTime: normalizeObservedAt(target),
     source: {
       name: "챙겨썸 예상 혼잡도",
       url: null,
@@ -141,6 +191,14 @@ export function estimateCurrentCrowd(place, now = new Date()) {
     forecast: [],
     timingAdvice: null,
   };
+}
+
+export function estimateCurrentCrowd(place, now = new Date()) {
+  return estimateCrowd(place, {
+    targetTime: now,
+    basis: "now",
+    computedAt: now,
+  });
 }
 
 function normalizeOfficialLevel(value) {
@@ -322,7 +380,10 @@ export async function fetchSeoulCurrentCrowd({
         "통신사 실시간 인구와 장소 면적을 함께 분석해요",
       ].filter(Boolean),
       populationRange: currentPopulation?.label ?? null,
-      observedAt: cleanText(crowd.PPLTN_TIME, 40) || now.toISOString(),
+      // 서울시 PPLTN_TIME("YYYY-MM-DD HH:mm")은 한국 시간이에요.
+      observedAt: normalizeObservedAt(cleanText(crowd.PPLTN_TIME, 40), now),
+      basis: "now",
+      targetTime: normalizeObservedAt(now),
       source: {
         name: "서울 실시간 도시데이터",
         url: SEOUL_CROWD_SOURCE_URL,

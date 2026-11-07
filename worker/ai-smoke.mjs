@@ -1,5 +1,13 @@
 import assert from "node:assert/strict";
 
+function futureStartsAt(daysAhead, time) {
+  const kstNow = new Date(Date.now() + 9 * 60 * 60 * 1000);
+  const date = new Date(kstNow.getTime() + daysAhead * 24 * 60 * 60 * 1000)
+    .toISOString()
+    .slice(0, 10);
+  return `${date}T${time}:00+09:00`;
+}
+
 const baseUrl =
   process.env.WORKER_API_URL ??
   "https://chaengyeosum-api.kwakhyun-miniapps.workers.dev";
@@ -21,7 +29,7 @@ const created = await request("/api/outings", {
   body: JSON.stringify({
     title: "AI 브리핑 배포 검증",
     placeId: "yeouido-hangang",
-    startsAt: "2026-08-09T14:00:00+09:00",
+    startsAt: futureStartsAt(7, "14:00"),
     activityType: "picnic",
     expectedPeople: 4,
     creatorName: "배포검증",

@@ -1,5 +1,13 @@
 import assert from "node:assert/strict";
 
+function futureStartsAt(daysAhead, time) {
+  const kstNow = new Date(Date.now() + 9 * 60 * 60 * 1000);
+  const date = new Date(kstNow.getTime() + daysAhead * 24 * 60 * 60 * 1000)
+    .toISOString()
+    .slice(0, 10);
+  return `${date}T${time}:00+09:00`;
+}
+
 const baseUrl = (
   process.env.API_BASE_URL ??
   "https://chaengyeosum-api.kwakhyun-miniapps.workers.dev"
@@ -22,7 +30,7 @@ const created = await request("/api/outings", {
   body: JSON.stringify({
     title: "장소 인텔리전스 점검",
     placeId: "gwangalli",
-    startsAt: "2026-08-08T19:00:00+09:00",
+    startsAt: futureStartsAt(6, "19:00"),
     activityType: "festival",
     expectedPeople: 4,
     creatorName: "점검봇",

@@ -3,7 +3,92 @@ import { once } from "node:events";
 import test from "node:test";
 
 import { createApiServer } from "./app.mjs";
+import { addDaysToDateKey } from "./kst-date.mjs";
 import { getKoreaDateKey } from "./weather.mjs";
+
+function futureStartsAt(daysAhead = 7, time = "14:00") {
+  return `${addDaysToDateKey(getKoreaDateKey(), daysAhead)}T${time}:00+09:00`;
+}
+
+async function call(
+  baseUrl,
+  path,
+  { method = "GET", token, userKey, body, headers = {} } = {},
+) {
+  const response = await fetch(`${baseUrl}${path}`, {
+    method,
+    headers: {
+      ...(body !== undefined ? { "content-type": "application/json" } : {}),
+      ...(token ? { authorization: `Bearer ${token}` } : {}),
+      ...(userKey ? { "x-chaengyeosum-user-key": userKey } : {}),
+      ...headers,
+    },
+    body: body !== undefined ? JSON.stringify(body) : undefined,
+  });
+  const text = await response.text();
+  return {
+    status: response.status,
+    headers: response.headers,
+    text,
+    body: text ? JSON.parse(text) : null,
+  };
+}
+
+async function createTestOuting(baseUrl, overrides = {}, { userKey } = {}) {
+  const result = await call(baseUrl, "/api/outings", {
+    method: "POST",
+    userKey,
+    body: {
+      title: "테스트 모임",
+      placeId: "seoul-forest",
+      startsAt: futureStartsAt(3),
+      activityType: "picnic",
+      expectedPeople: 2,
+      creatorName: "모임장",
+      itemKeys: ["water", "mat", "hat"],
+      ...overrides,
+    },
+  });
+  assert.equal(result.status, 201, JSON.stringify(result.body));
+  return result.body;
+}
+
+function joinTestOuting(baseUrl, created, name, extra = {}, { userKey } = {}) {
+  return call(baseUrl, `/api/outings/${created.outing.outing.id}/join`, {
+    method: "POST",
+    userKey,
+    body: {
+      inviteCode: created.outing.outing.inviteCode,
+      name,
+      ...extra,
+    },
+  });
+}
+
+function forecastStub(counter, { fail = false } = {}) {
+  return async (url) => {
+    assert.match(String(url), /open-meteo/);
+    counter.calls += 1;
+    if (fail) return new Response("{}", { status: 500 });
+    const today = getKoreaDateKey();
+    const time = Array.from({ length: 16 }, (_, index) =>
+      addDaysToDateKey(today, index),
+    );
+    return new Response(
+      JSON.stringify({
+        daily: {
+          time,
+          weather_code: time.map(() => 1),
+          temperature_2m_min: time.map(() => 24),
+          temperature_2m_max: time.map(() => 31),
+          precipitation_probability_max: time.map(() => 10),
+          uv_index_max: time.map(() => 7),
+        },
+      }),
+      { status: 200, headers: { "content-type": "application/json" } },
+    );
+  };
+}
 
 async function withServer(run, options = {}) {
   const app = createApiServer({
@@ -30,7 +115,7 @@ test("모임 생성, 초대 참여, 공동 체크 상태가 API에 저장된다"
       body: JSON.stringify({
         title: "주말 한강 피크닉",
         placeId: "yeouido-hangang",
-        startsAt: "2026-08-02T14:00:00+09:00",
+        startsAt: futureStartsAt(1, "14:00"),
         activityType: "water-play",
         expectedPeople: 4,
         creatorName: "현우",
@@ -42,7 +127,7 @@ test("모임 생성, 초대 참여, 공동 체크 상태가 API에 저장된다"
     const created = await createResponse.json();
     const outingId = created.outing.outing.id;
     const inviteCode = created.outing.outing.inviteCode;
-    const firstItem = created.outing.items[0];
+    const firstItem = created.outing.items.find((item) => item.owner == null);
     assert.equal(created.outing.items.length, 3);
     assert.equal(created.outing.outing.activityType, "water-play");
     assert.equal(created.outing.outing.expectedPeople, 4);
@@ -211,7 +296,7 @@ test("토스 익명 식별키로 내 모임을 복구하고 참여자 권한을 
       body: JSON.stringify({
         title: "익명키 복구 모임",
         placeId: "seoul-forest",
-        startsAt: "2026-08-10T10:00:00+09:00",
+        startsAt: futureStartsAt(9, "10:00"),
         activityType: "picnic",
         expectedPeople: 3,
         creatorName: "익명사용자",
@@ -261,7 +346,7 @@ test("토스 익명 식별키로 내 모임을 복구하고 참여자 권한을 
       body: JSON.stringify({
         title: "기존 세션 연결 모임",
         placeId: "yeouido-hangang",
-        startsAt: "2026-08-11T10:00:00+09:00",
+        startsAt: futureStartsAt(10, "10:00"),
         activityType: "picnic",
         expectedPeople: 2,
         creatorName: "기존사용자",
@@ -302,7 +387,7 @@ test("검색한 사용자 장소의 좌표와 이름으로 모임을 만든다",
           latitude: 33.49962,
           longitude: 126.53119,
         },
-        startsAt: "2026-08-06T10:00:00+09:00",
+        startsAt: futureStartsAt(5, "10:00"),
         activityType: "trip",
         expectedPeople: 25,
         creatorName: "테스터",
@@ -367,7 +452,7 @@ test("초대 코드나 참여 토큰이 없으면 모임을 읽을 수 없다", 
       body: JSON.stringify({
         title: "비공개 물놀이",
         placeId: "gwangalli",
-        startsAt: "2026-08-03T10:00:00+09:00",
+        startsAt: futureStartsAt(2, "10:00"),
         creatorName: "서연",
       }),
     }).then((response) => response.json());
@@ -387,7 +472,7 @@ test("모임은 최초 생성자만 삭제할 수 있고 삭제 후에는 조회
       body: JSON.stringify({
         title: "삭제 권한 확인 모임",
         placeId: "seoul-forest",
-        startsAt: "2026-08-10T18:00:00+09:00",
+        startsAt: futureStartsAt(9, "18:00"),
         activityType: "picnic",
         expectedPeople: 3,
         creatorName: "모임장",
@@ -453,7 +538,7 @@ test("준비물은 1개 이상 15개 이하로 유지된다", async () => {
       body: JSON.stringify({
         title: "준비물 경계 테스트",
         placeId: "yeouido-hangang",
-        startsAt: "2026-08-04T10:00:00+09:00",
+        startsAt: futureStartsAt(3, "10:00"),
         creatorName: "테스터",
         itemKeys: options.options.map((option) => option.key),
         customItems: ["커스텀1", "커스텀2", "커스텀3"],
@@ -480,7 +565,7 @@ test("준비물은 1개 이상 15개 이하로 유지된다", async () => {
       body: JSON.stringify({
         title: "준비물 한 개",
         placeId: "gwangalli",
-        startsAt: "2026-08-05T10:00:00+09:00",
+        startsAt: futureStartsAt(4, "10:00"),
         creatorName: "테스터",
         itemKeys: ["water"],
         customItems: [],
@@ -541,9 +626,14 @@ test("메인 혼잡 슬라이더에 한강공원 실시간 인구를 제공한�
         payload.places.every(
           (place) =>
             place.currentCrowd.mode === "live" &&
-            place.currentCrowd.populationRange === "1,500~2,000명",
+            place.currentCrowd.populationRange === "1,500~2,000명" &&
+            place.currentCrowd.observedAt === "2026-07-29T08:20:00+09:00",
         ),
       );
+      // 5분 동안은 같은 결과를 다시 쓰고 서울시 API를 부르지 않아요.
+      const cachedResponse = await fetch(`${baseUrl}/api/crowd-highlights`);
+      assert.equal(cachedResponse.status, 200);
+      assert.equal(crowdCalls, 4);
     },
     { seoulOpenDataApiKey: "secret", fetchImpl },
   );
@@ -609,7 +699,7 @@ test("한강과 워터파크 외 여름 모임 장소를 다양하게 제공한�
 test("활동 유형에 맞는 스마트 준비물을 추천한다", async () => {
   await withServer(async (baseUrl) => {
     const response = await fetch(
-      `${baseUrl}/api/packing-recommendations?activityType=festival&placeId=yeouido-hangang&startsAt=2026-08-04T10%3A00%3A00%2B09%3A00&expectedPeople=6`,
+      `${baseUrl}/api/packing-recommendations?activityType=festival&placeId=yeouido-hangang&startsAt=${encodeURIComponent(futureStartsAt(3, "10:00"))}&expectedPeople=6`,
     );
     assert.equal(response.status, 200);
     const result = await response.json();
@@ -724,7 +814,7 @@ test("장소 혼잡도를 구분해 보여주고 AI 행사 출처를 검증해 �
         body: JSON.stringify({
           title: "광안리 여름밤",
           placeId: "gwangalli",
-          startsAt: "2026-08-08T19:00:00+09:00",
+          startsAt: futureStartsAt(7, "19:00"),
           activityType: "festival",
           expectedPeople: 4,
           creatorName: "현우",
@@ -832,7 +922,7 @@ test("AI 브리핑은 참여자만 생성하고 같은 준비 상태에서는 �
         body: JSON.stringify({
           title: "AI 한강 피크닉",
           placeId: "yeouido-hangang",
-          startsAt: "2026-08-09T14:00:00+09:00",
+          startsAt: futureStartsAt(8, "14:00"),
           activityType: "picnic",
           expectedPeople: 4,
           creatorName: "민감한닉네임",
@@ -885,4 +975,862 @@ test("AI 브리핑은 참여자만 생성하고 같은 준비 상태에서는 �
       openAiApiKey: "test-openai-key",
     },
   );
+});
+
+test("번들에 장소 분류·지난 모임·권한·인원 기준 수량을 담는다", async () => {
+  await withServer(async (baseUrl) => {
+    const created = await createTestOuting(baseUrl, {
+      placeId: "caribbean-bay",
+      activityType: "water-play",
+      expectedPeople: 2,
+      avatarKey: "type-chill",
+      customItems: ["보드게임"],
+    });
+    const bundle = created.outing;
+    assert.equal(bundle.outing.placeCategory, "waterpark");
+    assert.equal(
+      bundle.outing.placeImageUrl,
+      "/assets/waterpark-caribbean-bay-v1.webp",
+    );
+    assert.equal(bundle.outing.isPast, false);
+    assert.match(bundle.outing.startsAt, /^\d{4}-\d{2}-\d{2}T14:00:00\+09:00$/);
+    assert.equal(bundle.isCreator, true);
+    assert.equal(bundle.canDelete, true);
+    assert.equal(bundle.maxParticipants, 30);
+    assert.equal(bundle.weatherStatus, "unavailable");
+    assert.equal(bundle.participants[0].avatarKey, "type-chill");
+    assert.equal(
+      bundle.items.find((item) => item.label === "보드게임").quantityLabel,
+      "1개",
+    );
+    assert.equal(
+      bundle.items.find((item) => item.key === "water").quantityLabel,
+      "2명 기준 4병",
+    );
+
+    for (const name of ["하나", "둘", "셋"]) {
+      const joined = await joinTestOuting(baseUrl, created, name, {
+        avatarKey: name === "하나" ? "type-foodie" : "not-allowed",
+      });
+      assert.equal(joined.status, 201);
+    }
+    const view = await call(baseUrl, `/api/outings/${bundle.outing.id}`, {
+      token: created.session.token,
+    });
+    assert.deepEqual(
+      view.body.participants.map((participant) => participant.avatarKey),
+      ["type-chill", "type-foodie", "junho", "seoyeon"],
+    );
+    // 예상 인원(2명)보다 실제 참여자(4명)가 많으면 참여자 수로 계산해요.
+    assert.equal(
+      view.body.items.find((item) => item.key === "water").quantityLabel,
+      "4명 기준 8병",
+    );
+    assert.ok(
+      view.body.smartRecommendations.some(
+        (item) => item.key === "waterproof-pouch",
+      ),
+    );
+
+    const custom = await createTestOuting(baseUrl, {
+      placeId: "custom:33.49962:126.53119",
+      customPlace: {
+        name: "제주시, 제주특별자치도",
+        latitude: 33.49962,
+        longitude: 126.53119,
+      },
+    });
+    assert.equal(custom.outing.outing.placeCategory, null);
+    assert.equal(custom.outing.outing.placeImageUrl, null);
+  });
+});
+
+test("최근 친구 소식은 30개까지 보여준다", async () => {
+  await withServer(async (baseUrl) => {
+    const created = await createTestOuting(baseUrl);
+    const item = created.outing.items.find((entry) => entry.key === "water");
+    for (let index = 0; index < 34; index += 1) {
+      const result = await call(
+        baseUrl,
+        `/api/outings/${created.outing.outing.id}/items/${item.id}`,
+        {
+          method: "PATCH",
+          token: created.session.token,
+          body: { done: index % 2 === 0 },
+        },
+      );
+      assert.equal(result.status, 200);
+    }
+    const view = await call(
+      baseUrl,
+      `/api/outings/${created.outing.outing.id}`,
+      { token: created.session.token },
+    );
+    assert.equal(view.body.events.length, 30);
+    assert.equal(view.body.events[0].type, "reopened");
+  });
+});
+
+test("모임 날짜는 오늘부터 365일 안의 한국 시간으로 정규화한다", async () => {
+  await withServer(async (baseUrl) => {
+    const base = {
+      title: "날짜 검증",
+      placeId: "seoul-forest",
+      creatorName: "테스터",
+      itemKeys: ["water"],
+    };
+    for (const startsAt of [
+      futureStartsAt(-1),
+      futureStartsAt(366),
+      "다음 주 토요일",
+      "2027-02-30T10:00:00+09:00",
+      undefined,
+    ]) {
+      const result = await call(baseUrl, "/api/outings", {
+        method: "POST",
+        body: { ...base, startsAt },
+      });
+      assert.equal(result.status, 400, String(startsAt));
+      assert.deepEqual(result.body, {
+        error: "모임 날짜를 다시 확인해 주세요.",
+        code: "invalid_date",
+      });
+    }
+
+    // UTC로 보내도 한국 날짜·시간으로 저장해요.
+    const kstDate = addDaysToDateKey(getKoreaDateKey(), 5);
+    const utcDate = addDaysToDateKey(kstDate, -1);
+    const created = await call(baseUrl, "/api/outings", {
+      method: "POST",
+      body: { ...base, startsAt: `${utcDate}T16:30:45.000Z` },
+    });
+    assert.equal(created.status, 201);
+    assert.equal(
+      created.body.outing.outing.startsAt,
+      `${kstDate}T01:30:00+09:00`,
+    );
+
+    for (const expectedPeople of [0, 51, 2.5, "많이"]) {
+      const result = await call(baseUrl, "/api/outings", {
+        method: "POST",
+        body: { ...base, startsAt: futureStartsAt(2), expectedPeople },
+      });
+      assert.equal(result.status, 400);
+      assert.equal(result.body.code, "invalid_people");
+    }
+    const defaulted = await call(baseUrl, "/api/outings", {
+      method: "POST",
+      body: { ...base, startsAt: futureStartsAt(2) },
+    });
+    assert.equal(defaulted.body.outing.outing.expectedPeople, 2);
+
+    const preview = await call(
+      baseUrl,
+      `/api/packing-recommendations?activityType=picnic&placeId=seoul-forest&startsAt=${encodeURIComponent(futureStartsAt(2))}&expectedPeople=999`,
+    );
+    assert.equal(preview.status, 200);
+    assert.equal(preview.body.expectedPeople, 50);
+  });
+});
+
+test("담당자 맡기·해제·완료·삭제 권한을 지킨다", async () => {
+  await withServer(async (baseUrl) => {
+    const created = await createTestOuting(baseUrl, {
+      itemKeys: ["water", "mat", "hat", "camera"],
+    });
+    const outingId = created.outing.outing.id;
+    const creator = created.session;
+    const first = (await joinTestOuting(baseUrl, created, "민지")).body.session;
+    const second = (await joinTestOuting(baseUrl, created, "준호")).body
+      .session;
+    const item = created.outing.items.find((entry) => entry.key === "mat");
+    const itemPath = `/api/outings/${outingId}/items/${item.id}`;
+    const patch = (session, body) =>
+      call(baseUrl, itemPath, {
+        method: "PATCH",
+        token: session.token,
+        body,
+      });
+    const ownerOf = async () =>
+      (
+        await call(baseUrl, `/api/outings/${outingId}`, {
+          token: creator.token,
+        })
+      ).body.items.find((entry) => entry.id === item.id);
+
+    assert.equal((await patch(first, { ownerId: first.participantId })).status, 200);
+    const conflict = await patch(second, { ownerId: second.participantId });
+    assert.equal(conflict.status, 409);
+    assert.deepEqual(conflict.body, {
+      error: "이미 민지님이 맡은 준비물이에요.",
+      code: "already_claimed",
+    });
+
+    const doneByOther = await patch(second, { done: true });
+    assert.equal(doneByOther.status, 403);
+    assert.deepEqual(doneByOther.body, {
+      error: "담당자만 준비 상태를 바꿀 수 있어요.",
+      code: "forbidden",
+    });
+    assert.equal((await patch(first, { done: true })).status, 200);
+    // 이미 내 담당이면 다시 맡아도 완료 상태가 그대로예요.
+    assert.equal((await patch(first, { ownerId: first.participantId })).status, 200);
+    assert.equal((await ownerOf()).done, true);
+
+    const unassignByOther = await patch(second, { ownerId: null });
+    assert.equal(unassignByOther.status, 403);
+    assert.deepEqual(unassignByOther.body, {
+      error: "담당자나 모임을 만든 사람만 바꿀 수 있어요.",
+      code: "forbidden",
+    });
+
+    // 담당자는 다른 친구에게 넘길 수 있어요.
+    assert.equal((await patch(first, { ownerId: second.participantId })).status, 200);
+    const handedOff = await ownerOf();
+    assert.equal(handedOff.owner.id, second.participantId);
+    assert.equal(handedOff.done, false);
+    assert.equal((await patch(first, { ownerId: null })).status, 403);
+    assert.equal(
+      (await patch(first, { ownerId: first.participantId })).status,
+      409,
+    );
+
+    // 모임을 만든 사람은 누구의 담당이든 바꿀 수 있어요.
+    assert.equal((await patch(creator, { ownerId: null })).status, 200);
+    const afterUnassign = await call(baseUrl, `/api/outings/${outingId}`, {
+      token: creator.token,
+    });
+    assert.equal(afterUnassign.body.events[0].type, "unassigned");
+    assert.equal(afterUnassign.body.events[0].participant.id, creator.participantId);
+    assert.equal((await patch(creator, { ownerId: first.participantId })).status, 200);
+    assert.equal((await patch(creator, { ownerId: creator.participantId })).status, 200);
+    assert.equal((await ownerOf()).owner.id, creator.participantId);
+    assert.equal((await patch(first, { ownerId: second.participantId })).status, 403);
+
+    const invalidOwner = await patch(creator, { ownerId: "pt_not_here" });
+    assert.equal(invalidOwner.status, 400);
+    assert.equal(invalidOwner.body.code, "invalid_owner");
+
+    // 삭제: 담당자 없는 준비물 · 내 준비물 · 만든 사람만 지울 수 있어요.
+    const water = created.outing.items.find((entry) => entry.key === "water");
+    const deniedDelete = await call(
+      baseUrl,
+      `/api/outings/${outingId}/items/${water.id}`,
+      { method: "DELETE", token: second.token },
+    );
+    assert.equal(deniedDelete.status, 403);
+    assert.equal(deniedDelete.body.code, "forbidden");
+    const camera = created.outing.items.find((entry) => entry.key === "camera");
+    assert.equal(
+      (
+        await call(baseUrl, `/api/outings/${outingId}/items/${camera.id}`, {
+          method: "DELETE",
+          token: second.token,
+        })
+      ).status,
+      200,
+    );
+
+    const completeNothing = await call(
+      baseUrl,
+      `/api/outings/${outingId}/complete-mine`,
+      { method: "POST", token: second.token },
+    );
+    assert.equal(completeNothing.body.completed, 0);
+    const eventsAfter = (
+      await call(baseUrl, `/api/outings/${outingId}`, { token: creator.token })
+    ).body.events;
+    assert.equal(
+      eventsAfter.some((event) => event.type === "completed_mine"),
+      false,
+    );
+
+    const randomized = await call(baseUrl, `/api/outings/${outingId}/randomize`, {
+      method: "POST",
+      token: creator.token,
+    });
+    assert.equal(randomized.status, 200);
+    assert.equal(randomized.body.assigned, 1);
+  });
+});
+
+test("마지막 준비물은 지울 수 없다", async () => {
+  await withServer(async (baseUrl) => {
+    const created = await createTestOuting(baseUrl, { itemKeys: ["hat"] });
+    const result = await call(
+      baseUrl,
+      `/api/outings/${created.outing.outing.id}/items/${created.outing.items[0].id}`,
+      { method: "DELETE", token: created.session.token },
+    );
+    assert.equal(result.status, 409);
+    assert.deepEqual(result.body, {
+      error: "준비물은 하나 이상 있어야 해요.",
+      code: "last_item",
+    });
+  });
+});
+
+test("모임 정보는 만든 사람만 수정하고 날짜·장소가 바뀌면 날씨를 새로 받는다", async () => {
+  const counter = { calls: 0 };
+  await withServer(
+    async (baseUrl) => {
+      const created = await createTestOuting(baseUrl, {
+        startsAt: futureStartsAt(3),
+      });
+      const outingId = created.outing.outing.id;
+      assert.equal(created.outing.weatherStatus, "ok");
+      assert.equal(counter.calls, 1);
+      const friend = (await joinTestOuting(baseUrl, created, "친구")).body
+        .session;
+      const path = `/api/outings/${outingId}`;
+
+      const denied = await call(baseUrl, path, {
+        method: "PATCH",
+        token: friend.token,
+        body: { title: "친구가 바꾼 이름" },
+      });
+      assert.equal(denied.status, 403);
+      assert.deepEqual(denied.body, {
+        error: "모임을 만든 사람만 수정할 수 있어요.",
+        code: "not_creator",
+      });
+      const anonymous = await call(baseUrl, path, {
+        method: "PATCH",
+        body: { title: "누군가" },
+      });
+      assert.equal(anonymous.status, 403);
+
+      const renamed = await call(baseUrl, path, {
+        method: "PATCH",
+        token: created.session.token,
+        body: { title: "  새 이름의   모임 ", expectedPeople: 6 },
+      });
+      assert.equal(renamed.status, 200);
+      assert.equal(renamed.body.outing.outing.title, "새 이름의 모임");
+      assert.equal(renamed.body.outing.outing.expectedPeople, 6);
+      assert.equal(renamed.body.outing.events[0].type, "updated");
+      assert.equal(renamed.body.outing.events[0].itemLabel, null);
+      assert.equal(
+        renamed.body.outing.items.find((item) => item.key === "water")
+          .quantityLabel,
+        "6명 기준 12병",
+      );
+      assert.equal(counter.calls, 1);
+
+      const moved = await call(baseUrl, path, {
+        method: "PATCH",
+        token: created.session.token,
+        body: { startsAt: futureStartsAt(4, "18:00"), placeId: "gwangalli" },
+      });
+      assert.equal(moved.status, 200);
+      assert.equal(moved.body.outing.outing.placeId, "gwangalli");
+      assert.equal(moved.body.outing.outing.placeCategory, "beach");
+      assert.equal(moved.body.outing.outing.startsAt, futureStartsAt(4, "18:00"));
+      assert.equal(counter.calls, 2);
+
+      for (const [body, code] of [
+        [{ startsAt: futureStartsAt(-3) }, "invalid_date"],
+        [{ expectedPeople: 0 }, "invalid_people"],
+        [{ title: "a" }, "invalid_outing"],
+        [{ placeId: "nowhere" }, "invalid_outing"],
+        [{}, "invalid_outing"],
+      ]) {
+        const result = await call(baseUrl, path, {
+          method: "PATCH",
+          token: created.session.token,
+          body,
+        });
+        assert.equal(result.status, 400, JSON.stringify(body));
+        assert.equal(result.body.code, code);
+      }
+    },
+    { weatherEnabled: true, fetchImpl: forecastStub(counter) },
+  );
+});
+
+test("초대 링크를 새로 만들면 예전 링크는 더 이상 쓸 수 없다", async () => {
+  await withServer(async (baseUrl) => {
+    const created = await createTestOuting(baseUrl);
+    const outingId = created.outing.outing.id;
+    const oldCode = created.outing.outing.inviteCode;
+    const friend = (await joinTestOuting(baseUrl, created, "친구")).body
+      .session;
+
+    const denied = await call(baseUrl, `/api/outings/${outingId}/invite-code`, {
+      method: "POST",
+      token: friend.token,
+    });
+    assert.equal(denied.status, 403);
+    assert.equal(denied.body.code, "not_creator");
+
+    const reset = await call(baseUrl, `/api/outings/${outingId}/invite-code`, {
+      method: "POST",
+      token: created.session.token,
+    });
+    assert.equal(reset.status, 200);
+    assert.ok(reset.body.inviteCode);
+    assert.notEqual(reset.body.inviteCode, oldCode);
+
+    const staleJoin = await joinTestOuting(baseUrl, created, "늦은친구");
+    assert.equal(staleJoin.status, 403);
+    assert.equal(staleJoin.body.code, "invalid_invite");
+    const staleView = await call(
+      baseUrl,
+      `/api/outings/${outingId}?invite=${encodeURIComponent(oldCode)}`,
+    );
+    assert.equal(staleView.status, 403);
+    const freshView = await call(
+      baseUrl,
+      `/api/outings/${outingId}?invite=${encodeURIComponent(reset.body.inviteCode)}`,
+    );
+    assert.equal(freshView.status, 200);
+    assert.equal(freshView.body.viewer, null);
+    assert.equal(freshView.body.isCreator, false);
+
+    const friendView = await call(baseUrl, `/api/outings/${outingId}`, {
+      token: friend.token,
+    });
+    assert.equal(friendView.status, 200);
+    assert.equal(friendView.body.outing.inviteCode, reset.body.inviteCode);
+  });
+});
+
+test("참여는 30명까지이고 같은 익명 사용자는 기존 참여자로 다시 들어온다", async () => {
+  await withServer(async (baseUrl) => {
+    const created = await createTestOuting(baseUrl, {
+      itemKeys: ["water", "mat", "hat"],
+    });
+    const outingId = created.outing.outing.id;
+    const mat = created.outing.items.find((item) => item.key === "mat");
+    const hat = created.outing.items.find((item) => item.key === "hat");
+
+    const claimed = await joinTestOuting(
+      baseUrl,
+      created,
+      "돗자리",
+      { claimItemId: mat.id },
+      { userKey: "join-user-1" },
+    );
+    assert.equal(claimed.status, 201);
+    assert.equal(claimed.body.claimResult, "claimed");
+    assert.equal(
+      claimed.body.outing.items.find((item) => item.id === mat.id).owner.id,
+      claimed.body.session.participantId,
+    );
+
+    const again = await joinTestOuting(
+      baseUrl,
+      created,
+      "다시왔어요",
+      { claimItemId: mat.id },
+      { userKey: "join-user-1" },
+    );
+    assert.equal(again.status, 200);
+    assert.equal(
+      again.body.session.participantId,
+      claimed.body.session.participantId,
+    );
+    assert.ok(again.body.session.token);
+    assert.notEqual(again.body.session.token, claimed.body.session.token);
+    assert.equal(again.body.claimResult, "claimed");
+    assert.equal(again.body.outing.participants.length, 2);
+    const oldToken = await call(baseUrl, `/api/outings/${outingId}`, {
+      token: claimed.body.session.token,
+    });
+    assert.equal(oldToken.status, 403);
+    const newToken = await call(baseUrl, `/api/outings/${outingId}`, {
+      token: again.body.session.token,
+    });
+    assert.equal(newToken.body.viewer.id, claimed.body.session.participantId);
+
+    const taken = await joinTestOuting(baseUrl, created, "늦게", {
+      claimItemId: mat.id,
+    });
+    assert.equal(taken.body.claimResult, "taken");
+    const noClaim = await joinTestOuting(baseUrl, created, "그냥");
+    assert.equal(noClaim.body.claimResult, "none");
+    const missingClaim = await joinTestOuting(baseUrl, created, "없는거", {
+      claimItemId: "item_missing",
+    });
+    assert.equal(missingClaim.body.claimResult, "none");
+    assert.equal(
+      (
+        await joinTestOuting(baseUrl, created, "모자", {
+          claimItemId: hat.id,
+        })
+      ).body.claimResult,
+      "claimed",
+    );
+
+    // 지금 6명이에요. 30명까지 채워요.
+    for (let index = 6; index < 30; index += 1) {
+      const result = await joinTestOuting(baseUrl, created, `친구${index}`);
+      assert.equal(result.status, 201, `join ${index}`);
+    }
+    const full = await joinTestOuting(baseUrl, created, "서른하나");
+    assert.equal(full.status, 409);
+    assert.deepEqual(full.body, {
+      error: "모임 인원이 가득 찼어요.",
+      code: "outing_full",
+    });
+    // 이미 참여한 사람은 인원이 차도 다시 들어올 수 있어요.
+    const rejoin = await joinTestOuting(
+      baseUrl,
+      created,
+      "돗자리",
+      {},
+      { userKey: "join-user-1" },
+    );
+    assert.equal(rejoin.status, 200);
+    assert.equal(rejoin.body.outing.participants.length, 30);
+  });
+});
+
+test("바뀐 게 없으면 ETag로 304를 돌려준다", async () => {
+  await withServer(async (baseUrl) => {
+    const created = await createTestOuting(baseUrl);
+    const outingId = created.outing.outing.id;
+    const path = `/api/outings/${outingId}`;
+    const firstView = await call(baseUrl, path, {
+      token: created.session.token,
+    });
+    assert.equal(firstView.status, 200);
+    const etag = firstView.headers.get("etag");
+    assert.equal(
+      etag,
+      `W/"0-0-${created.session.participantId}"`,
+    );
+    assert.equal(firstView.headers.get("cache-control"), "private, no-cache");
+    assert.match(
+      firstView.headers.get("access-control-expose-headers"),
+      /etag/i,
+    );
+
+    const preflight = await call(baseUrl, path, { method: "OPTIONS" });
+    assert.equal(preflight.status, 204);
+    assert.match(
+      preflight.headers.get("access-control-allow-headers"),
+      /if-none-match/,
+    );
+
+    const notModified = await call(baseUrl, path, {
+      token: created.session.token,
+      headers: { "if-none-match": etag },
+    });
+    assert.equal(notModified.status, 304);
+    assert.equal(notModified.text, "");
+    assert.equal(notModified.headers.get("etag"), etag);
+
+    const friend = await joinTestOuting(baseUrl, created, "친구");
+    const friendView = await call(baseUrl, path, {
+      token: friend.body.session.token,
+      headers: { "if-none-match": etag },
+    });
+    assert.equal(friendView.status, 200);
+
+    const afterJoin = await call(baseUrl, path, {
+      token: created.session.token,
+      headers: { "if-none-match": etag },
+    });
+    assert.equal(afterJoin.status, 200);
+    const joinedEtag = afterJoin.headers.get("etag");
+    assert.notEqual(joinedEtag, etag);
+
+    const item = created.outing.items.find((entry) => entry.owner == null);
+    await call(baseUrl, `${path}/items/${item.id}`, {
+      method: "PATCH",
+      token: created.session.token,
+      body: { done: true },
+    });
+    const afterPatch = await call(baseUrl, path, {
+      token: created.session.token,
+      headers: { "if-none-match": joinedEtag },
+    });
+    assert.equal(afterPatch.status, 200);
+    assert.equal(afterPatch.body.items.find((entry) => entry.id === item.id).done, true);
+  });
+});
+
+test("예보 범위 밖이면 날씨 API를 부르지 않고 실패는 잠시 기억한다", async () => {
+  const counter = { calls: 0 };
+  await withServer(
+    async (baseUrl) => {
+      const far = await createTestOuting(baseUrl, {
+        startsAt: futureStartsAt(30),
+      });
+      assert.equal(far.outing.weather, null);
+      assert.equal(far.outing.weatherStatus, "out_of_range");
+      const preview = await call(
+        baseUrl,
+        `/api/packing-recommendations?activityType=picnic&placeId=seoul-forest&startsAt=${encodeURIComponent(futureStartsAt(40))}`,
+      );
+      assert.equal(preview.body.weatherStatus, "out_of_range");
+      assert.equal(preview.body.weather, null);
+      assert.equal(counter.calls, 0);
+    },
+    { weatherEnabled: true, fetchImpl: forecastStub(counter) },
+  );
+
+  const failing = { calls: 0 };
+  await withServer(
+    async (baseUrl) => {
+      const created = await createTestOuting(baseUrl, {
+        startsAt: futureStartsAt(2),
+      });
+      assert.equal(created.outing.weather, null);
+      assert.equal(created.outing.weatherStatus, "unavailable");
+      assert.equal(failing.calls, 1);
+      const again = await call(
+        baseUrl,
+        `/api/outings/${created.outing.outing.id}`,
+        { token: created.session.token },
+      );
+      assert.equal(again.body.weatherStatus, "unavailable");
+      assert.equal(failing.calls, 1);
+    },
+    {
+      weatherEnabled: true,
+      fetchImpl: forecastStub(failing, { fail: true }),
+    },
+  );
+});
+
+test("지난 모임은 AI 기능을 막고 내 모임 목록은 다가오는 순서로 보여준다", async () => {
+  let clock = Date.now();
+  let openAiCalls = 0;
+  const fetchImpl = async () => {
+    openAiCalls += 1;
+    throw new Error("OpenAI must not be called");
+  };
+  await withServer(
+    async (baseUrl) => {
+      const userKey = "ordering-user";
+      const make = (title, days) =>
+        createTestOuting(
+          baseUrl,
+          { title, startsAt: futureStartsAt(days) },
+          { userKey },
+        );
+      const a = await make("하루 뒤", 1);
+      const b = await make("이틀 뒤", 2);
+      const c = await make("여드레 뒤", 8);
+      const d = await make("열이틀 뒤", 12);
+      const e = await make("한 달 뒤", 30);
+
+      clock += 5 * 24 * 60 * 60 * 1000;
+
+      const sessions = (
+        await call(baseUrl, "/api/me/outings", { userKey })
+      ).body.sessions;
+      assert.deepEqual(
+        sessions.map((session) => session.title),
+        ["여드레 뒤", "열이틀 뒤", "한 달 뒤", "이틀 뒤", "하루 뒤"],
+      );
+      assert.deepEqual(
+        sessions.map((session) => session.isPast),
+        [false, false, false, true, true],
+      );
+      assert.ok([a, b, c, d, e].every(Boolean));
+
+      const pastView = await call(
+        baseUrl,
+        `/api/outings/${a.outing.outing.id}`,
+        { userKey },
+      );
+      assert.equal(pastView.body.outing.isPast, true);
+      assert.equal(pastView.body.weatherStatus, "past");
+
+      for (const endpoint of ["ai-briefing", "summer-events"]) {
+        const result = await call(
+          baseUrl,
+          `/api/outings/${a.outing.outing.id}/${endpoint}`,
+          { method: "POST", userKey },
+        );
+        assert.equal(result.status, 409);
+        assert.deepEqual(result.body, {
+          error: "이미 지난 모임이에요.",
+          code: "outing_past",
+        });
+      }
+      assert.equal(openAiCalls, 0);
+    },
+    { fetchImpl, openAiApiKey: "test-key", now: () => clock },
+  );
+});
+
+test("여러 모임 요약을 한 번에 가볍게 돌려준다", async () => {
+  await withServer(async (baseUrl) => {
+    const userKey = "summary-user";
+    const first = await createTestOuting(baseUrl, {
+      title: "첫 모임",
+      itemKeys: ["water", "mat", "hat"],
+    });
+    const second = await createTestOuting(
+      baseUrl,
+      { title: "둘째 모임", itemKeys: ["mat", "hat"] },
+      { userKey },
+    );
+    const friend = await joinTestOuting(baseUrl, first, "친구", {
+      claimItemId: first.outing.items.find((item) => item.key === "mat").id,
+    });
+
+    const result = await call(baseUrl, "/api/outing-summaries", {
+      method: "POST",
+      userKey,
+      body: {
+        sessions: [
+          { outingId: first.outing.outing.id, token: first.session.token },
+          { outingId: second.outing.outing.id, token: "" },
+          { outingId: "out_missing", token: "nope" },
+          { outingId: first.outing.outing.id, token: "wrong-token" },
+        ],
+      },
+    });
+    assert.equal(result.status, 200);
+    assert.deepEqual(result.body.summaries, [
+      {
+        outingId: first.outing.outing.id,
+        title: "첫 모임",
+        placeName: "서울숲",
+        startsAt: first.outing.outing.startsAt,
+        ready: 0,
+        total: 3,
+        unassigned: 1,
+        myOpen: 1,
+        canDelete: true,
+        isPast: false,
+      },
+      {
+        outingId: second.outing.outing.id,
+        title: "둘째 모임",
+        placeName: "서울숲",
+        startsAt: second.outing.outing.startsAt,
+        ready: 0,
+        total: 2,
+        unassigned: 2,
+        myOpen: 0,
+        canDelete: true,
+        isPast: false,
+      },
+    ]);
+
+    const friendSummary = await call(baseUrl, "/api/outing-summaries", {
+      method: "POST",
+      body: {
+        sessions: [
+          { outingId: first.outing.outing.id, token: friend.body.session.token },
+        ],
+      },
+    });
+    assert.equal(friendSummary.body.summaries[0].canDelete, false);
+    assert.equal(friendSummary.body.summaries[0].myOpen, 1);
+
+    // 토큰으로 요약을 읽으면 익명 사용자 키도 연결돼 내 모임에 보여요.
+    const linked = await call(baseUrl, "/api/me/outings", { userKey });
+    assert.deepEqual(
+      linked.body.sessions.map((session) => session.outingId).sort(),
+      [first.outing.outing.id, second.outing.outing.id].sort(),
+    );
+  });
+});
+
+test("하루 요청 한도를 넘으면 429를 돌려준다", async () => {
+  await withServer(async (baseUrl) => {
+    for (let index = 0; index < 20; index += 1) {
+      await createTestOuting(baseUrl, { title: `한도 ${index}` }, {
+        userKey: "busy-user",
+      });
+    }
+    const limited = await call(baseUrl, "/api/outings", {
+      method: "POST",
+      userKey: "busy-user",
+      body: {
+        title: "한도 초과",
+        placeId: "seoul-forest",
+        startsAt: futureStartsAt(3),
+        creatorName: "모임장",
+      },
+    });
+    assert.equal(limited.status, 429);
+    assert.deepEqual(limited.body, {
+      error: "오늘은 요청이 너무 많아요. 내일 다시 시도해 주세요.",
+      code: "rate_limited",
+    });
+    // 다른 사용자는 영향을 받지 않아요.
+    await createTestOuting(baseUrl, {}, { userKey: "calm-user" });
+  });
+});
+
+test("AI 브리핑은 실패한 시도도 모임별 하루 한도에 포함한다", async () => {
+  let openAiCalls = 0;
+  const fetchImpl = async () => {
+    openAiCalls += 1;
+    return new Response(JSON.stringify({ error: { code: "server_error" } }), {
+      status: 500,
+      headers: { "content-type": "application/json" },
+    });
+  };
+  await withServer(
+    async (baseUrl) => {
+      const created = await createTestOuting(baseUrl);
+      const endpoint = `/api/outings/${created.outing.outing.id}/ai-briefing`;
+      for (let index = 0; index < 8; index += 1) {
+        const result = await call(baseUrl, endpoint, {
+          method: "POST",
+          token: created.session.token,
+        });
+        assert.equal(result.status, 502);
+        assert.equal(result.body.code, "ai_failed");
+      }
+      const limited = await call(baseUrl, endpoint, {
+        method: "POST",
+        token: created.session.token,
+      });
+      assert.equal(limited.status, 429);
+      assert.equal(limited.body.code, "daily_limit");
+      assert.equal(openAiCalls, 8);
+    },
+    { fetchImpl, openAiApiKey: "test-key" },
+  );
+});
+
+test("모임 혼잡도는 오늘이 아니면 모임 시각 기준으로 예상한다", async () => {
+  await withServer(async (baseUrl) => {
+    const later = await createTestOuting(baseUrl, {
+      placeId: "gwangalli",
+      startsAt: futureStartsAt(6, "19:00"),
+    });
+    const laterCrowd = await call(
+      baseUrl,
+      `/api/outings/${later.outing.outing.id}/place-intelligence`,
+      { token: later.session.token },
+    );
+    assert.equal(laterCrowd.status, 200);
+    assert.equal(laterCrowd.body.crowd.basis, "outing");
+    assert.equal(laterCrowd.body.crowd.targetTime, futureStartsAt(6, "19:00"));
+    assert.match(laterCrowd.body.crowd.summary, /^모임 시간에는/);
+    assert.match(laterCrowd.body.crowd.observedAt, /\+09:00$/);
+
+    const today = await createTestOuting(baseUrl, {
+      placeId: "gwangalli",
+      startsAt: futureStartsAt(0, "23:00"),
+    });
+    const todayCrowd = await call(
+      baseUrl,
+      `/api/outings/${today.outing.outing.id}/place-intelligence`,
+      { token: today.session.token },
+    );
+    assert.equal(todayCrowd.body.crowd.basis, "now");
+    assert.match(todayCrowd.body.crowd.targetTime, /\+09:00$/);
+    assert.match(todayCrowd.body.crowd.summary, /^지금은/);
+
+    const places = await call(baseUrl, "/api/places");
+    assert.ok(
+      places.body.places.every((place) =>
+        /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\+09:00$/.test(
+          place.currentCrowd.observedAt,
+        ),
+      ),
+    );
+  });
 });

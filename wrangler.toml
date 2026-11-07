@@ -22,3 +22,7 @@ binding = "DB"
 database_name = "chaengyeosum-prod"
 database_id = "34b930b5-4d62-4071-aa86-967e9331b6d2"
 migrations_dir = "migrations"
+
+# 매일 04:17 KST(19:17 UTC)에 오래된 모임·캐시·사용량 기록을 정리해요.
+[triggers]
+crons = ["17 19 * * *"]
