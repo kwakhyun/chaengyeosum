@@ -1544,6 +1544,23 @@ test("바뀐 게 없으면 ETag로 304를 돌려준다", async () => {
     assert.equal(notModified.text, "");
     assert.equal(notModified.headers.get("etag"), etag);
 
+    // 새 앱은 Chromium WebView가 preflight를 재사용하도록 전용 헤더로 보내요.
+    assert.match(
+      preflight.headers.get("access-control-allow-headers"),
+      /x-chaengyeosum-etag/,
+    );
+    const customHeader = await call(baseUrl, path, {
+      token: created.session.token,
+      headers: { "x-chaengyeosum-etag": etag },
+    });
+    assert.equal(customHeader.status, 304);
+    // 브라우저가 붙인 If-None-Match가 있으면 그 값을 먼저 따라요.
+    const browserConditional = await call(baseUrl, path, {
+      token: created.session.token,
+      headers: { "x-chaengyeosum-etag": etag, "if-none-match": 'W/"stale"' },
+    });
+    assert.equal(browserConditional.status, 200);
+
     const friend = await joinTestOuting(baseUrl, created, "친구");
     const friendView = await call(baseUrl, path, {
       token: friend.body.session.token,

@@ -308,6 +308,15 @@ export const SQL = {
   bumpRevision: `
     UPDATE outings SET revision = revision + 1 WHERE id = ?
   `,
+  // 같은 batch에서 조건부 이벤트가 실제로 들어갔을 때만 revision을 올려요.
+  // 이벤트 조건이 곧 쓰기 조건이라, 아무것도 바뀌지 않은 요청(이미 완료한
+  // 준비물 다시 완료, 마지막 준비물 삭제 거절, 동시에 맡기 실패)이 모든
+  // 참여자의 ETag를 바꾸지 않아요.
+  // params: [outingId, eventId]
+  bumpRevisionIfEvent: `
+    UPDATE outings SET revision = revision + 1
+    WHERE id = ? AND EXISTS (SELECT 1 FROM activity_events WHERE id = ?)
+  `,
   // params: [inviteCode, outingId]
   resetInviteCode: `
     UPDATE outings SET invite_code = ?, revision = revision + 1 WHERE id = ?
@@ -338,6 +347,8 @@ export const SQL = {
   deleteOuting: `DELETE FROM outings WHERE id = ?`,
   // 예보를 받은 뒤 모임 날짜·장소가 바뀌었거나 모임이 지워졌으면 쓰지
   // 않아요(늦게 끝난 갱신이 새 예보를 덮거나 FK 오류가 나지 않게).
+  // fetched_at이 더 최신일 때만 덮어써, 늦게 실패한 갱신이 그사이 성공한
+  // 새 예보를 이전 예보로 되돌리지 않아요.
   // SELECT에 WHERE가 있어 upsert의 ON CONFLICT와 헷갈리지 않아요.
   // params: [outingId, payload, fetchedAt,
   //          outingId, startsAt, latitude, longitude]
@@ -351,6 +362,7 @@ export const SQL = {
     ON CONFLICT(outing_id) DO UPDATE SET
       payload = excluded.payload,
       fetched_at = excluded.fetched_at
+    WHERE weather_cache.fetched_at < excluded.fetched_at
   `,
   // params: [outingId]
   deleteWeather: `DELETE FROM weather_cache WHERE outing_id = ?`,

@@ -15,6 +15,7 @@ import {
   getOutingDateKey,
 } from "./kst-date.mjs";
 import { formatOutingEtag, RATE_LIMITS } from "./outing-rules.mjs";
+import { SQL } from "./outing-sql.mjs";
 import {
   getWeatherRetryFetchedAt,
   WEATHER_CACHE_TTL_MS,
@@ -414,5 +415,134 @@ test("Worker는 같은 /64의 IPv6 주소를 바꿔 가며 보내도 한 IP 한�
     });
     assert.equal((await create("2001:db8:1:3::1", "worker-v6-new")).status, 201);
     assert.equal(h.weather.state.calls, 0);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// revision · ETag
+
+test("Worker는 아무것도 바뀌지 않은 쓰기 요청에서 revision을 올리지 않아 304를 지킨다", async () => {
+  await withWorker(async (h) => {
+    // 예보 범위 밖 날짜라 날씨 스탬프가 바뀌지 않아요. 물·간식은 모임장에게
+    // 자동 배정되므로, 담당자가 없는 준비물로 시작해요.
+    const created = await h.createOuting({
+      startsAt: futureStartsAt(30),
+      itemKeys: ["mat", "towel"],
+    });
+    assert.equal(created.status, 201, JSON.stringify(created.body));
+    const outingId = created.body.outing.outing.id;
+    const { token } = created.body.session;
+    const [first, second] = created.body.outing.items;
+
+    const initial = await h.call(`/api/outings/${outingId}`, { token });
+    const etag = initial.headers.get("etag");
+    assert.ok(etag);
+    const startRevision = h.revision(outingId);
+
+    // 맡은 준비물이 없을 때 "내 준비 끝내기"는 아무것도 바꾸지 않아요.
+    const noop = await h.call(`/api/outings/${outingId}/complete-mine`, {
+      method: "POST",
+      token,
+    });
+    assert.equal(noop.status, 200);
+    assert.equal(noop.body.completed, 0);
+    assert.equal(h.revision(outingId), startRevision);
+
+    // 새 앱은 조건부 헤더 대신 x-chaengyeosum-etag로 버전을 보내요.
+    const unchanged = await h.call(`/api/outings/${outingId}`, {
+      token,
+      headers: { "x-chaengyeosum-etag": etag },
+    });
+    assert.equal(unchanged.status, 304);
+    const legacy = await h.call(`/api/outings/${outingId}`, {
+      token,
+      headers: { "if-none-match": etag },
+    });
+    assert.equal(legacy.status, 304);
+
+    // 하나를 지우면 revision이 오르고, 마지막 하나 삭제 거절은 그대로예요.
+    const removed = await h.call(`/api/outings/${outingId}/items/${first.id}`, {
+      method: "DELETE",
+      token,
+    });
+    assert.equal(removed.status, 200, JSON.stringify(removed.body));
+    const afterDelete = h.revision(outingId);
+    assert.equal(afterDelete, startRevision + 1);
+    const lastItem = await h.call(
+      `/api/outings/${outingId}/items/${second.id}`,
+      { method: "DELETE", token },
+    );
+    assert.equal(lastItem.status, 409);
+    assert.equal(lastItem.body.code, "last_item");
+    assert.equal(h.revision(outingId), afterDelete);
+
+    // 실제로 바뀐 쓰기는 revision을 한 번만 올려요.
+    const claimed = await h.call(
+      `/api/outings/${outingId}/items/${second.id}`,
+      {
+        method: "PATCH",
+        token,
+        body: { ownerId: created.body.session.participantId },
+      },
+    );
+    assert.equal(claimed.status, 200, JSON.stringify(claimed.body));
+    assert.equal(h.revision(outingId), afterDelete + 1);
+    const done = await h.call(`/api/outings/${outingId}/complete-mine`, {
+      method: "POST",
+      token,
+    });
+    assert.equal(done.body.completed, 1);
+    assert.equal(h.revision(outingId), afterDelete + 2);
+  });
+});
+
+test("Worker preflight는 x-chaengyeosum-etag 헤더를 허용하고 10분 동안 재사용된다", async () => {
+  await withWorker(async (h) => {
+    const preflight = await h.call("/api/outings/out_x", {
+      method: "OPTIONS",
+      headers: {
+        origin: "https://chaengyeosum.apps.tossmini.com",
+        "access-control-request-method": "GET",
+        "access-control-request-headers":
+          "authorization, x-chaengyeosum-etag, x-chaengyeosum-user-key",
+      },
+    });
+    assert.ok(preflight.status === 204 || preflight.status === 200);
+    assert.match(
+      preflight.headers.get("access-control-allow-headers") ?? "",
+      /x-chaengyeosum-etag/,
+    );
+    assert.equal(preflight.headers.get("access-control-max-age"), "600");
+  });
+});
+
+test("날씨 캐시는 더 최신 fetched_at으로만 덮어써 늦게 실패한 갱신이 새 예보를 되돌리지 않는다", async () => {
+  await withWorker(async (h) => {
+    const created = await h.createOuting({ startsAt: futureStartsAt(30) });
+    const outing = created.body.outing.outing;
+    const row = h.db.sqlite
+      .prepare("SELECT starts_at, latitude, longitude FROM outings WHERE id = ?")
+      .get(outing.id);
+    const put = (payload, fetchedAt) =>
+      h.db.sqlite
+        .prepare(SQL.putWeather)
+        .run(
+          outing.id,
+          JSON.stringify(payload),
+          fetchedAt,
+          outing.id,
+          row.starts_at,
+          row.latitude,
+          row.longitude,
+        );
+    const now = Date.now();
+    put({ maxTemperature: 31 }, now - WEATHER_CACHE_TTL_MS - 60_000);
+    // 그사이 성공한 갱신이 새 예보를 저장해요.
+    put({ maxTemperature: 33 }, now);
+    // 먼저 시작했다가 늦게 실패한 갱신이 이전 예보를 다시 쓰려 해요.
+    put({ maxTemperature: 31 }, getWeatherRetryFetchedAt(now));
+    const cached = h.weatherRow(outing.id);
+    assert.equal(JSON.parse(cached.payload).maxTemperature, 33);
+    assert.equal(cached.fetched_at, now);
   });
 });

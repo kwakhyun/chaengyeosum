@@ -86,7 +86,7 @@ const PREFLIGHT_MAX_AGE_SECONDS = "600";
 
 const BASE_HEADERS = {
   "access-control-allow-headers":
-    "authorization, content-type, if-none-match, x-chaengyeosum-user-key",
+    "authorization, content-type, if-none-match, x-chaengyeosum-etag, x-chaengyeosum-user-key",
   "access-control-allow-methods": "GET, POST, PATCH, DELETE, OPTIONS",
   "access-control-allow-origin": "*",
   "access-control-expose-headers": "etag",
@@ -335,7 +335,10 @@ export function createApiServer({
     }
 
     const nowMs = now();
-    const ifNoneMatch = header(request, "if-none-match");
+    // Worker와 같이 If-None-Match를 먼저 보고, 없으면 x-chaengyeosum-etag를 써요.
+    const ifNoneMatch =
+      header(request, "if-none-match") ||
+      header(request, "x-chaengyeosum-etag");
     if (ifNoneMatch) {
       const cached = weatherCacheFromRow(access.outingRow);
       const weatherStamp = getCachedWeatherStamp({

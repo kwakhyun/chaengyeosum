@@ -200,6 +200,10 @@ export function getOuting(
   );
 }
 
+// 새 서버는 x-chaengyeosum-etag를 허용해요. 배포 순서가 어긋나 예전 서버가
+// 이 헤더를 막으면(CORS 실패) 이번 실행 동안은 If-None-Match로 돌아가요.
+let customEtagHeaderBlocked = false;
+
 /**
  * ETag를 보내 바뀐 내용이 없으면 본문 없이 304를 받아요.
  * 폴링 때 같은 모임 데이터를 반복해서 내려받지 않게 해요.
@@ -214,17 +218,27 @@ export async function getOutingIfChanged(
   const query = options.inviteCode
     ? `?invite=${encodeURIComponent(options.inviteCode)}`
     : "";
-  let response: Response;
-  try {
-    response = await apiFetch(
-      `/outings/${encodeURIComponent(outingId)}${query}`,
-      {
-        // cache 옵션을 따로 주지 않아야 WebView가 CORS 사전 요청 결과를 재사용해요.
-        // If-None-Match를 직접 넣으면 브라우저 캐시 대신 304가 그대로 전달돼요.
-        headers: options.etag ? { "if-none-match": options.etag } : {},
-      },
+  const path = `/outings/${encodeURIComponent(outingId)}${query}`;
+  // 버전은 조건부 헤더(If-None-Match)가 아닌 전용 헤더로 보내요. Chromium
+  // WebView는 조건부 헤더가 있는 요청마다 CORS 사전 요청을 다시 보내요.
+  const send = (headerName: string) =>
+    apiFetch(
+      path,
+      { headers: options.etag ? { [headerName]: options.etag } : {} },
       options.token,
     );
+  let response: Response;
+  try {
+    if (options.etag && !customEtagHeaderBlocked) {
+      try {
+        response = await send("x-chaengyeosum-etag");
+      } catch {
+        response = await send("if-none-match");
+        customEtagHeaderBlocked = true;
+      }
+    } else {
+      response = await send("if-none-match");
+    }
   } catch {
     throw new ApiError(
       "네트워크 연결을 확인해 주세요.",
@@ -233,8 +247,14 @@ export async function getOutingIfChanged(
     );
   }
   if (response.status === 304) return { changed: false };
+  const etag = response.headers.get("etag");
+  // 브라우저 캐시가 304를 받아 저장본을 200으로 돌려준 경우도 같은 버전이에요.
+  if (response.ok && options.etag && etag === options.etag) {
+    void response.body?.cancel().catch(() => {});
+    return { changed: false };
+  }
   const bundle = await readJson<OutingBundle>(response);
-  return { changed: true, bundle, etag: response.headers.get("etag") };
+  return { changed: true, bundle, etag };
 }
 
 export function updateOuting(

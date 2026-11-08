@@ -126,8 +126,8 @@ flowchart LR
 | AI 브리핑 | 준비 상태 지문별 12시간 재사용 · 모임별 하루 8회(실패 포함 시도 기준) |
 | 여름 행사 검색 | 6시간 캐시 · 모임별 하루 3회(시도 기준) |
 | 요청 제한 | 사용자 키 한도와 IP 한도를 **함께** 적용 · 사용자 키당 하루 모임 생성 20회 · 참여 60회 · AI 브리핑 20회 · 행사 검색 10회 · IP당 그 3배(통신사 NAT 고려, 사용자 키가 없는 요청도 같은 IP 한도) · AI 브리핑과 행사 검색의 OpenAI 호출은 서비스 전체 하루 600회(`AI_GLOBAL_DAILY_LIMIT`) · IPv6는 `/64` 단위로 묶어 셈(IPv4 매핑 주소는 IPv4로) · Worker는 `CF-Connecting-IP`, Node API는 `TRUST_PROXY` 설정에 따라 믿는 프록시가 덧붙인 `X-Forwarded-For` 값(아니면 소켓 주소) 기준 |
-| CORS | preflight 결과를 10분(`Access-Control-Max-Age: 600`) 재사용해 폴링마다 OPTIONS 요청을 줄임 |
-| 공동 준비 상태 | 10초 폴링 · ETag/304 |
+| CORS | preflight 결과를 10분(`Access-Control-Max-Age: 600`) 재사용해 폴링마다 OPTIONS 요청을 줄임. 새 앱은 버전을 조건부 헤더 대신 `x-chaengyeosum-etag`로 보내 Chromium WebView도 preflight를 재사용하고, 서버는 예전 앱의 `If-None-Match`도 그대로 받음 |
+| 공동 준비 상태 | 10초 폴링 · ETag/304 · 실제로 바뀐 쓰기만 revision을 올림 |
 | 데이터 보관 | 매일 정리 작업(cron)으로 출발 180일이 지난 모임과 오래된 캐시·요청 제한 기록 삭제 |
 
 ### 개인정보와 권한
@@ -159,7 +159,7 @@ flowchart LR
 현재 릴리스 기준으로 다음 검사를 자동화했습니다.
 
 - TypeScript 타입 검사
-- API 계약·도메인 테스트 **45개** (권한·충돌·ETag·요청 제한·날씨 캐시·KST 날짜 포함)
+- API 계약·도메인 테스트 (`npm run test:api`: 권한·충돌·ETag·요청 제한·날씨 캐시·KST 날짜·Worker 동작 포함)
 - 로컬 `wrangler dev` + D1 대상 Worker 스모크 테스트
 - Cloudflare Worker 운영 스모크 테스트
 - 비게임 미니앱 출시 정적 점검 **18개**

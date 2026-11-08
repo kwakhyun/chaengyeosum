@@ -29,7 +29,7 @@ npm run deploy:worker
 
 새 마이그레이션은 `migrations`에 순번 SQL 파일로 추가한 뒤 위 순서대로 적용한다.
 
-`0005_revisions_rate_limits.sql`은 ETag용 `outings.revision`, 요청 제한 테이블, 조회 인덱스를 추가하고 기존 `starts_at`을 KST ISO 형식으로 정규화한다. 새 Worker는 이 컬럼과 테이블을 사용하므로 **반드시 마이그레이션을 먼저 적용한 뒤 배포**한다.
+`0005_revisions_rate_limits.sql`은 ETag용 `outings.revision`, 요청 제한 테이블, 조회 인덱스를 추가하고 기존 `starts_at`을 KST ISO 형식으로 정규화한다. 새 Worker는 이 컬럼과 테이블을 사용하므로 **반드시 마이그레이션을 먼저 적용한 뒤 배포**한다. 새 앱(AIT)은 새 Worker가 허용하는 `x-chaengyeosum-etag` 헤더를 쓰므로 **Worker를 먼저 배포한 뒤 앱을 출시**한다(순서가 어긋나도 앱이 CORS 실패를 감지해 `If-None-Match`로 돌아가며, 그때 요청이 한 번 더 나간다).
 
 `0005`는 예전 서버가 저장한 50명 초과 `expected_people`도 50으로 맞춘다. 아직 운영 D1에 적용하지 않았으므로 이 내용까지 포함해 한 번에 적용한다.
 

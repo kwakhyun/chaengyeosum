@@ -37,7 +37,10 @@ import {
   listWeatherHighlights,
   searchPlaces,
 } from "./api";
-import { initializeAnonymousUser } from "./anonymous-user";
+import {
+  initializeAnonymousUser,
+  waitForAnonymousUser,
+} from "./anonymous-user";
 import { summerTypeAvatarKey } from "./avatars";
 import { CrowdHighlightsCarousel } from "./components/CrowdHighlightsCarousel";
 import { PlacePicker, waterActivityForCategory } from "./components/PlacePicker";
@@ -372,7 +375,33 @@ function sameSessionList(left: SavedSession[], right: SavedSession[]) {
 }
 
 // 로컬 참여 토큰을 토스 익명 사용자와 연결하는 일은 앱 실행마다 한 번이면 충분해요.
-let linkedAnonymousKey = "";
+// 진행 중인 연결은 공유해서, 그사이 홈 화면이 다시 열려도 결과를 함께 받아요.
+let sessionLink: { key: string; promise: Promise<void> } | null = null;
+
+function linkAnonymousSessions(anonymousUser: {
+  key: string;
+  canLinkLocalSessions: boolean;
+}) {
+  if (sessionLink?.key === anonymousUser.key) return sessionLink.promise;
+  const localSessions = anonymousUser.canLinkLocalSessions
+    ? getSavedSessions()
+    : [];
+  // 요약 조회가 로컬 참여 토큰을 토스 익명 사용자와 연결해요.
+  const promise = loadOutingSummaries(localSessions)
+    .then(() => listMySessions())
+    .then((result) => {
+      // 복구한 목록은 저장소에 먼저 남겨, 화면이 바뀌어도 잃지 않아요.
+      if (anonymousUser.canLinkLocalSessions) mergeSessions(result.sessions);
+      else replaceSessions(result.sessions);
+    })
+    .catch((error: unknown) => {
+      // 실패하면 다음 홈 진입에서 다시 시도해요.
+      if (sessionLink?.promise === promise) sessionLink = null;
+      throw error;
+    });
+  sessionLink = { key: anonymousUser.key, promise };
+  return promise;
+}
 
 export default function App() {
   const [outingId, setOutingId] = useState(currentOutingId);
@@ -559,28 +588,18 @@ function HomePage({
   }, [crowdHighlights, places]);
 
   useEffect(() => {
-    if (!anonymousUser || linkedAnonymousKey === anonymousUser.key) return;
-    linkedAnonymousKey = anonymousUser.key;
+    if (!anonymousUser) return;
     let cancelled = false;
-    const localSessions = anonymousUser.canLinkLocalSessions
-      ? getSavedSessions()
-      : [];
-    // 요약 조회가 로컬 참여 토큰을 토스 익명 사용자와 연결해요.
-    loadOutingSummaries(localSessions)
-      .then(() => listMySessions())
-      .then((result) => {
-        // 화면을 떠났더라도 복구한 목록은 저장해 두고, 다음 홈 진입에서 그대로 써요.
-        const next = anonymousUser.canLinkLocalSessions
-          ? mergeSessions(result.sessions)
-          : replaceSessions(result.sessions);
+    linkAnonymousSessions(anonymousUser)
+      .then(() => {
         if (cancelled) return;
+        const next = getSavedSessions();
         setSessions((current) =>
           sameSessionList(current, next) ? current : next,
         );
       })
       .catch(() => {
-        // 식별키 동기화가 실패하면 다음 홈 진입에서 다시 시도해요.
-        linkedAnonymousKey = "";
+        // 식별키 동기화가 실패해도 기존 로컬 세션으로 계속 이용해요.
       });
     return () => {
       cancelled = true;
@@ -751,7 +770,13 @@ function HomePage({
       return;
     }
     let cancelled = false;
-    void loadOutingSummaries(sessions).then(({ summaries, missing }) => {
+    void (async () => {
+      // 토큰 없이 복구된 모임은 익명 키로만 요약을 받을 수 있어 키를 먼저 기다려요.
+      if (sessions.some((session) => !session.token)) {
+        await waitForAnonymousUser();
+      }
+      return loadOutingSummaries(sessions);
+    })().then(({ summaries, missing }) => {
       if (cancelled) return;
       if (missing.length > 0) {
         // 삭제됐거나 보관 기간이 지나 서버에서 사라진 모임은 목록에서도 지워요.

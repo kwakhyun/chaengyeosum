@@ -119,7 +119,7 @@ function corsHeaders(request) {
   const origin = request.headers.get("origin");
   return {
     "access-control-allow-headers":
-      "authorization, content-type, if-none-match, x-chaengyeosum-user-key",
+      "authorization, content-type, if-none-match, x-chaengyeosum-etag, x-chaengyeosum-user-key",
     "access-control-allow-methods": "GET, POST, PATCH, DELETE, OPTIONS",
     "access-control-allow-origin": origin || "*",
     "access-control-expose-headers": "etag",
@@ -273,6 +273,11 @@ function eventStatement(
 
 function bumpStatement(db, outingId) {
   return statement(db, SQL.bumpRevision, [outingId]);
+}
+
+/** 같은 batch의 조건부 이벤트(eventId)가 들어갔을 때만 revision을 올려요. */
+function bumpIfEventStatement(db, outingId, eventId) {
+  return statement(db, SQL.bumpRevisionIfEvent, [outingId, eventId]);
 }
 
 // ---------------------------------------------------------------------------
@@ -587,7 +592,13 @@ async function getOuting(request, db, ctx, outingId, url) {
   }
 
   const nowMs = Date.now();
-  const ifNoneMatch = request.headers.get("if-none-match");
+  // 브라우저가 붙인 If-None-Match가 있으면 그 값을 따라요(304를 받으면
+  // 브라우저가 그 ETag의 저장본을 돌려줘요). 없으면 새 앱이 보내는
+  // x-chaengyeosum-etag를 써요. 조건부 헤더가 아니라 Chromium WebView도
+  // CORS preflight 결과를 재사용해요.
+  const ifNoneMatch =
+    request.headers.get("if-none-match") ||
+    request.headers.get("x-chaengyeosum-etag");
   if (ifNoneMatch) {
     const outingRow = access.outingRow;
     const cached = weatherCacheFromRow(outingRow);
@@ -714,9 +725,10 @@ async function claimForJoin(db, outingId, participantId, item) {
   if (!item) return "none";
   if (item.owner_id == null) {
     // 이벤트(같은 조건)·맡기·revision을 한 batch(트랜잭션)로 처리해요.
+    const eventId = opaqueId("evt");
     const [, assigned] = await db.batch([
       statement(db, SQL.insertEventIfUnowned, [
-        opaqueId("evt"),
+        eventId,
         outingId,
         participantId,
         "claimed",
@@ -726,7 +738,7 @@ async function claimForJoin(db, outingId, participantId, item) {
         outingId,
       ]),
       statement(db, SQL.assignIfUnowned, [participantId, item.id, outingId]),
-      bumpStatement(db, outingId),
+      bumpIfEventStatement(db, outingId, eventId),
     ]);
     if (changesOf(assigned) > 0) return "claimed";
   }
@@ -957,10 +969,11 @@ async function updateItem(request, db, outingId, itemId) {
     const observedOwnerId = item.owner_id ?? null;
     const observedDone = Number(item.done);
     const createdAt = new Date().toISOString();
+    const eventIds = plan.events.map(() => opaqueId("evt"));
     const results = await db.batch([
-      ...plan.events.map((event) =>
+      ...plan.events.map((event, index) =>
         statement(db, SQL.insertEventIfItemUnchanged, [
-          opaqueId("evt"),
+          eventIds[index],
           outingId,
           event.participantId,
           event.type,
@@ -980,7 +993,10 @@ async function updateItem(request, db, outingId, itemId) {
         observedOwnerId,
         observedDone,
       ]),
-      bumpStatement(db, outingId),
+      // 맡기 경쟁에서 진 시도는 revision을 올리지 않아요.
+      eventIds.length > 0
+        ? bumpIfEventStatement(db, outingId, eventIds[0])
+        : bumpStatement(db, outingId),
     ]);
     if (changesOf(results[plan.events.length]) > 0) {
       return json(request, 200, { ok: true });
@@ -1061,9 +1077,10 @@ async function deleteItem(request, db, outingId, itemId) {
     // 마지막 준비물이 아니고 담당자가 그대로일 때만 지워요.
     // 이벤트(같은 조건으로 확인)·삭제·revision을 한 batch로 처리해요.
     const observedOwnerId = item.owner_id ?? null;
+    const eventId = opaqueId("evt");
     const [, deleted] = await db.batch([
       statement(db, SQL.insertEventIfItemDeletable, [
-        opaqueId("evt"),
+        eventId,
         outingId,
         access.viewer.id,
         "item_deleted",
@@ -1080,7 +1097,7 @@ async function deleteItem(request, db, outingId, itemId) {
         observedOwnerId,
         outingId,
       ]),
-      bumpStatement(db, outingId),
+      bumpIfEventStatement(db, outingId, eventId),
     ]);
     if (changesOf(deleted) > 0) {
       return json(request, 200, { ok: true });
@@ -1097,9 +1114,10 @@ async function completeMine(request, db, outingId) {
   const { access, response } = await requireParticipant(request, db, outingId);
   if (response) return response;
   // 이벤트(남은 준비물이 있을 때만)·완료·revision을 한 batch로 처리해요.
+  const eventId = opaqueId("evt");
   const [, result] = await db.batch([
     statement(db, SQL.insertEventIfOpenItems, [
-      opaqueId("evt"),
+      eventId,
       outingId,
       access.viewer.id,
       "completed_mine",
@@ -1109,7 +1127,7 @@ async function completeMine(request, db, outingId) {
       access.viewer.id,
     ]),
     statement(db, SQL.completeMine, [outingId, access.viewer.id]),
-    bumpStatement(db, outingId),
+    bumpIfEventStatement(db, outingId, eventId),
   ]);
   return json(request, 200, { ok: true, completed: changesOf(result) });
 }
@@ -1144,9 +1162,10 @@ async function randomizeItems(request, db, outingId) {
   // 이벤트(배정될 개수를 같은 조건으로 계산)·배정·revision을 한 batch로
   // 처리해요.
   const itemIds = assignments.map(({ itemId }) => itemId);
+  const eventId = opaqueId("evt");
   const results = await db.batch([
     statement(db, insertRandomizedEventSql(itemIds.length), [
-      opaqueId("evt"),
+      eventId,
       outingId,
       access.viewer.id,
       outingId,
@@ -1158,7 +1177,7 @@ async function randomizeItems(request, db, outingId) {
     ...assignments.map(({ itemId, ownerId }) =>
       statement(db, SQL.assignIfUnowned, [ownerId, itemId, outingId]),
     ),
-    bumpStatement(db, outingId),
+    bumpIfEventStatement(db, outingId, eventId),
   ]);
   const assigned = results
     .slice(1, 1 + assignments.length)
